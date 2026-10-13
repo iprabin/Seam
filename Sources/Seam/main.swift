@@ -5,6 +5,7 @@ import Carbon.HIToolbox
 //   ⌘⌥ ←→↑↓     move the window that way      ⌃⌥⇧ ←→↑↓  focus that way
 //   ⌘⇧ ↩        zoom (whole screen) toggle     ⌘⌥ C      float / tile toggle
 //   ⌘⌥ T        flip group: side by side ⇄ stacked
+//   ⌘⌥ S        stack the next window under this one
 //   ⌃⌥ - / =    shrink / grow                  drag a window's edge to resize
 //   drag a window onto another: an edge splits it there, the middle swaps the two.
 
@@ -428,6 +429,16 @@ final class Tiler: NSObject {
         relayout()
     }
 
+    /** Pulls the next window in order (or the previous, at the end) in under the focused one. */
+    func stackNext() {
+        guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key] else { return }
+        let order = leaves(tree).filter { layouts[key]?.panes[$0] != nil }
+        guard let i = order.firstIndex(of: id), order.count > 1 else { return }
+        let other = i + 1 < order.count ? order[i + 1] : order[i - 1]
+        trees[key] = dropLeaf(tree, other, id, .bottom)
+        relayout()
+    }
+
     /** Flips the focused window's group between side by side and stacked. */
     func flipFocused() {
         guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key], var at = path(to: id, in: tree), at.popLast() != nil else { return }
@@ -454,6 +465,7 @@ final class Tiler: NSObject {
             (kVK_Return, command | shift, toggleZoom),
             (kVK_ANSI_C, order, toggleFloat),
             (kVK_ANSI_T, order, flipFocused),
+            (kVK_ANSI_S, order, stackNext),
             (kVK_ANSI_Minus, hyper, { self.grow(-0.05) }),
             (kVK_ANSI_Equal, hyper, { self.grow(0.05) }),
         ]
