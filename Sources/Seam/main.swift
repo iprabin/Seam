@@ -100,6 +100,9 @@ final class Tiler: NSObject {
     var floatZoomed: [Int: CGRect] = [:]
     /** The smallest size each window's app has allowed it, learned by trying. */
     var minSizes: [Int: CGSize] = [:]
+    /** Windows resized since the last minimum-size check, and that pending check. */
+    var unsettled: Set<Int> = []
+    var settle: DispatchWorkItem?
     /** A tiled window the user is moving or resizing with the mouse. */
     var dragging: Int?
     var resizing: Int?
@@ -245,15 +248,26 @@ final class Tiler: NSObject {
             guard let tree = trees[key] else { continue }
             let area = tileArea(screen)
             var out = Layout()
-            layout(tree, in: area, visible: visible, minSize: { self.minSizes[$0] ?? .zero }, into: &out)
+            layout(tree, in: area, visible: visible, minSize: minSize, into: &out)
             layouts[key] = out
             for (id, rect) in out.panes where place(id, id == zoomed ? area : rect) && id != zoomed { placed.append(id) }
         }
-        // An app with a minimum size comes out bigger than its tile; remember that
-        // minimum and lay out again so its neighbours make room. Minimums only grow,
-        // so this settles.
+        unsettled.formUnion(placed)
+        settle?.cancel()
+        let check = DispatchWorkItem { self.learnMinSizes() }
+        settle = check
+        // some apps take a moment to resize; reading straight away mistakes that for a minimum
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: check)
+    }
+
+    /**
+     * An app with a minimum size comes out bigger than its tile; remember that
+     * minimum and lay out again so its neighbours make room. Minimums only grow
+     * here, so this settles.
+     */
+    func learnMinSizes() {
         var learned = false
-        for id in placed {
+        for id in unsettled where id != dragging && id != resizing {
             guard let frame = windows[id]?.frame, let tile = applied[id] else { continue }
             let known = minSizes[id] ?? .zero
             let size = CGSize(width: frame.width > tile.width + 2 ? frame.width : known.width,
@@ -263,6 +277,7 @@ final class Tiler: NSObject {
                 learned = true
             }
         }
+        unsettled = []
         if learned { relayout() }
     }
 
@@ -469,12 +484,42 @@ final class Tiler: NSObject {
         relayout()
     }
 
-    /** Grows the focused window's share in its split; the others give way evenly. */
-    func grow(_ by: Double) {
-        guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key], var at = path(to: id, in: tree), let i = at.popLast() else { return }
-        trees[key] = updatingSizes(tree, at: at[...]) { sizes in
-            let old = sizes[i], new = min(max(old + by, 0.1), 0.9)
-            for j in sizes.indices where j != i { sizes[j] *= (1 - new) / (1 - old) }
+    /** The least room a window gets: what its app allows, and never under `minPane`. */
+    func minSize(_ id: Int) -> CGSize {
+        let learned = minSizes[id] ?? .zero
+        return CGSize(width: max(learned.width, minPane), height: max(learned.height, minPane))
+    }
+
+    /**
+     * Widens (or narrows) the focused window by `by` of its row, the others giving
+     * way in proportion, from its own minimum up to the others all at theirs.
+     * Outside any row it changes its height in its stack instead.
+     */
+    func grow(_ by: CGFloat) {
+        guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key], let panes = layouts[key]?.panes,
+              let full = path(to: id, in: tree), !full.isEmpty else { return }
+        // the nearest row around it, else its own stack
+        let depth = (0..<full.count).last { if case .split(.row, _, _)? = node(at: full.prefix($0), in: tree) { return true } else { return false } } ?? full.count - 1
+        let at = full.prefix(depth), i = full[depth]
+        guard case let .split(dir, children, sizes)? = node(at: at, in: tree) else { return }
+        let row = dir == .row
+        let visible = { panes[$0] != nil }
+        let shown = children.indices.filter { leaves(children[$0]).contains(where: visible) }
+        func extent(_ n: Node) -> CGFloat {
+            let rect = leaves(n).compactMap { panes[$0] }.reduce(CGRect.null) { $0.union($1) }
+            return row ? rect.width : rect.height
+        }
+        let length = shown.reduce(0) { $0 + extent(children[$1]) }
+        let least = { (j: Int) in minLength(children[j], dir, visible, self.minSize) }
+        let othersLeast = shown.filter { $0 != i }.reduce(0) { $0 + least($1) }
+        // shrinking a window already at its learned minimum tries smaller: the
+        // minimum may be stale, and if it's real it's learned again
+        if by < 0, extent(children[i]) <= least(i) + 2, case .leaf = children[i] { minSizes[id] = nil }
+        let target = min(max(extent(children[i]) + by * length, least(i)), length - othersLeast)
+        let total = shown.reduce(0) { $0 + sizes[$1] }
+        let old = sizes[i], new = Double(target / length) * total
+        trees[key] = updatingSizes(tree, at: at) { sizes in
+            for j in shown where j != i { sizes[j] *= (total - new) / (total - old) }
             sizes[i] = new
         }
         relayout()
@@ -493,8 +538,8 @@ final class Tiler: NSObject {
                Binding(title: "Flip Side by Side ⇄ Stacked", key: kVK_ANSI_T, modifiers: move, action: flipFocused),
                Binding(title: "Float / Tile", key: kVK_ANSI_C, modifiers: move, action: toggleFloat),
                Binding(title: "Whole Screen", key: kVK_Return, modifiers: move, action: toggleZoom),
-               Binding(title: "Shrink", key: kVK_ANSI_Minus, modifiers: move) { self.grow(-0.05) },
-               Binding(title: "Grow", key: kVK_ANSI_Equal, modifiers: move) { self.grow(0.05) }]
+               Binding(title: "Shrink", key: kVK_ANSI_Minus, modifiers: move) { self.grow(-0.1) },
+               Binding(title: "Grow", key: kVK_ANSI_Equal, modifiers: move) { self.grow(0.1) }]
     }()
 
     func registerHotKeys() {
@@ -534,6 +579,7 @@ final class Tiler: NSObject {
         trees = [:]
         windows = [:]
         applied = [:]
+        minSizes = [:]
         zoomed = nil
         sync()
     }

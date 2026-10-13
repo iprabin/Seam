@@ -25,7 +25,7 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | Resize by dragging a tiled window's edge; neighbours follow live | `handle` → `resizeFromEdges` → `shift` |
 | Drag a window onto another (like Zen browser): edge = split there, middle = swap, blue preview | `mouseDragged`/`mouseUp`/`move` |
 | Float toggle `⌘⌥C` (centres it); dialogs + `floatingApps` always float | `toggleFloat`, `AXUIElement.isStandard` |
-| `⌘⌥ ←→↑↓` swap places with the window that way (each keeps its size when in the same row/stack, `swapPlaces`), `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow | `bindings` |
+| `⌘⌥ ←→↑↓` swap places with the window that way (each keeps its size when in the same row/stack, `swapPlaces`), `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow width by 10% of its row, down to its min / up to the others at theirs (`grow`; height in a stack only if no row) | `bindings` |
 | `⌘⌥T` flips the focused window's group row ⇄ column (i3 `layout toggle split`) | `flipFocused`, `flipSplit` |
 | `⌘⌥S` toggles: pulls the next window in reading order (previous if last) under the focused one; on a stacked window, takes it out beside the stack and evens out that row's widths | `stackNext`, `unstack` |
 | One tree per display; unplugged display's windows move to main | `trees`, `relayout` |
@@ -63,8 +63,10 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
 
 - Windows on other Spaces aren't listed by AX → forgotten and re-tiled on return (marked `ponytail:`).
 - No animation; frames snap.
-- Apps with a minimum size: `relayout` notices a window that came out bigger than its tile,
-  records it in `minSizes`, and lays out again; `layout()` pins such children to their minimum
-  and shares the rest. If the minimums add up to more than the screen, windows still overlap.
+- Apps with a minimum size: 0.3s after a relayout, `learnMinSizes` notices a window that came out
+  bigger than its tile (read later because some apps resize late; reading at once learned bogus
+  minimums), records it in `minSizes`, and lays out again; every tile is at least `minPane` (200) both ways (`Tiler.minSize`); `layout()` pins such children to their minimum
+  and shares the rest. Shrinking a window already at its learned minimum forgets it (relearned if
+  real); Retile Everything clears them all. If the minimums add up to more than the screen, windows still overlap.
 - No persistence across restarts.
 - Not tested yet on real windows by the user at time of writing (2026-10-13): first feedback pending.
