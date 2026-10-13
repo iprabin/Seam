@@ -102,6 +102,8 @@ final class Tiler: NSObject {
     var minSizes: [Int: CGSize] = [:]
     /** Windows resized since the last minimum-size check, and that pending check. */
     var unsettled: Set<Int> = []
+    /** Windows made to give up room below their app's minimum by growing a neighbour. */
+    var squeezed: Set<Int> = []
     var settle: DispatchWorkItem?
     /** A tiled window the user is moving or resizing with the mouse. */
     var dragging: Int?
@@ -223,6 +225,7 @@ final class Tiler: NSObject {
         windows[id] = nil
         floatZoomed[id] = nil
         minSizes[id] = nil
+        squeezed.remove(id)
     }
 
     func onScreenIDs() -> Set<Int> {
@@ -267,7 +270,7 @@ final class Tiler: NSObject {
      */
     func learnMinSizes() {
         var learned = false
-        for id in unsettled where id != dragging && id != resizing {
+        for id in unsettled where id != dragging && id != resizing && !squeezed.contains(id) {
             guard let frame = windows[id]?.frame, let tile = applied[id] else { continue }
             let known = minSizes[id] ?? .zero
             let size = CGSize(width: frame.width > tile.width + 2 ? frame.width : known.width,
@@ -484,9 +487,9 @@ final class Tiler: NSObject {
         relayout()
     }
 
-    /** The least room a window gets: what its app allows, and never under `minPane`. */
+    /** The least room a window gets: what its app allows (unless squeezed), and never under `minPane`. */
     func minSize(_ id: Int) -> CGSize {
-        let learned = minSizes[id] ?? .zero
+        let learned = squeezed.contains(id) ? .zero : minSizes[id] ?? .zero
         return CGSize(width: max(learned.width, minPane), height: max(learned.height, minPane))
     }
 
@@ -511,10 +514,14 @@ final class Tiler: NSObject {
         }
         let length = shown.reduce(0) { $0 + extent(children[$1]) }
         let least = { (j: Int) in minLength(children[j], dir, visible, self.minSize) }
-        let othersLeast = shown.filter { $0 != i }.reduce(0) { $0 + least($1) }
+        // Growing squeezes the others below their apps' minimums: they run on under
+        // the focused window, which stays on top. Shrinking lets them have it back.
+        let others = shown.filter { $0 != i }.flatMap { leaves(children[$0]) }
+        if by > 0 { squeezed.formUnion(others) } else { squeezed.subtract(others) }
         // shrinking a window already at its learned minimum tries smaller: the
         // minimum may be stale, and if it's real it's learned again
         if by < 0, extent(children[i]) <= least(i) + 2, case .leaf = children[i] { minSizes[id] = nil }
+        let othersLeast = shown.filter { $0 != i }.reduce(0) { $0 + least($1) }
         let target = min(max(extent(children[i]) + by * length, least(i)), length - othersLeast)
         let total = shown.reduce(0) { $0 + sizes[$1] }
         let old = sizes[i], new = Double(target / length) * total
@@ -580,6 +587,7 @@ final class Tiler: NSObject {
         windows = [:]
         applied = [:]
         minSizes = [:]
+        squeezed = []
         zoomed = nil
         sync()
     }

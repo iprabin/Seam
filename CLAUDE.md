@@ -67,6 +67,8 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
   bigger than its tile (read later because some apps resize late; reading at once learned bogus
   minimums), records it in `minSizes`, and lays out again; every tile is at least `minPane` (200) both ways (`Tiler.minSize`); `layout()` pins such children to their minimum
   and shares the rest. Shrinking a window already at its learned minimum forgets it (relearned if
-  real); Retile Everything clears them all. If the minimums add up to more than the screen, windows still overlap.
+  real); Retile Everything clears them all. `⌘⌥=` marks the row's other windows `squeezed`:
+  their app minimums are ignored (floor `minPane` only), so they run on under the focused window;
+  `⌘⌥-` un-squeezes them. Otherwise, if the minimums add up to more than the screen, windows still overlap.
 - No persistence across restarts.
 - Not tested yet on real windows by the user at time of writing (2026-10-13): first feedback pending.
