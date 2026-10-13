@@ -148,16 +148,18 @@ func isStacked(_ root: Node, _ id: Int) -> Bool {
 
 /** Takes `id` out of its stack and puts it beside that stack: undoes stacking. */
 func unstack(_ root: Node, _ id: Int) -> Node {
-    guard isStacked(root, id), var at = path(to: id, in: root), at.popLast() != nil,
+    guard isStacked(root, id), var at = path(to: id, in: root), let j = at.popLast(),
           let without = removeLeaf(root, id) else { return root }
     // what's left of the stack is still at `at`; a row around it takes the window in
-    // beside it, and every column of that row evens out
+    // beside it (left if it was the stack's top, so stack-then-unstack round-trips),
+    // and every column of that row evens out
+    let left = j == 0
     let parent = at.dropLast()
     if let i = at.last, case .split(.row, var children, _)? = node(at: parent, in: without) {
-        children.insert(.leaf(id), at: i + 1)
+        children.insert(.leaf(id), at: left ? i : i + 1)
         return updating(without, at: parent) { _ in even(.row, children) }
     }
-    return updating(without, at: at[...]) { even(.row, [$0, .leaf(id)]) }
+    return updating(without, at: at[...]) { even(.row, left ? [.leaf(id), $0] : [$0, .leaf(id)]) }
 }
 
 /** Turns the split at `path` from a row into a column or back, like i3's `layout toggle split`. */
@@ -290,6 +292,8 @@ func treeSelfTest() {
     precondition(unstack(stacked, 3) == .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [1.0 / 3, 1.0 / 3, 1.0 / 3]), "unstack into the row, evened out")
     let column: Node = .split(.column, [.leaf(1), .leaf(2)], [0.5, 0.5])
     precondition(unstack(column, 2) == two, "unstack a stack at the root")
+    precondition(unstack(column, 1) == two, "unstacking the top keeps it left")
+    precondition(unstack(stacked, 2) == .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [1.0 / 3, 1.0 / 3, 1.0 / 3]), "top of an inner stack goes left of it")
     precondition(unstack(two, 2) == two, "not stacked: nothing to undo")
     let uneven: Node = .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [0.5, 0.3, 0.2])
     precondition(swapPlaces(uneven, 1, 3) == .split(.row, [.leaf(3), .leaf(2), .leaf(1)], [0.2, 0.3, 0.5]), "sizes travel with windows")
