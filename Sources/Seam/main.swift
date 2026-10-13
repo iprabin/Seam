@@ -82,6 +82,8 @@ final class Tiler: NSObject {
     var observers: [pid_t: AXObserver] = [:]
     var lastFocus: Int?
     var zoomed: Int?
+    /** Floating windows filling the screen, and the frame each had before. */
+    var floatZoomed: [Int: CGRect] = [:]
     /** A tiled window the user is moving or resizing with the mouse. */
     var dragging: Int?
     var resizing: Int?
@@ -196,6 +198,7 @@ final class Tiler: NSObject {
     func forget(_ id: Int) {
         untile(id)
         windows[id] = nil
+        floatZoomed[id] = nil
     }
 
     func onScreenIDs() -> Set<Int> {
@@ -401,10 +404,18 @@ final class Tiler: NSObject {
     }
 
     func toggleZoom() {
-        guard let id = focusedID(), treeKey(of: id) != nil else { return }
-        zoomed = zoomed == id ? nil : id
-        relayout()
-        raise(id)
+        guard let id = focusedID(), let window = windows[id] else { return }
+        if treeKey(of: id) != nil {
+            zoomed = zoomed == id ? nil : id
+            relayout()
+            raise(id)
+        } else if let before = floatZoomed.removeValue(forKey: id) {
+            window.setFrame(before)
+        } else if let frame = window.frame {
+            // a floating window fills the screen and comes back to where it was
+            floatZoomed[id] = frame
+            window.setFrame(tileArea(screen(containing: CGPoint(x: frame.midX, y: frame.midY))))
+        }
     }
 
     /** Lifts the window out of the tiling, centred; again puts it back where it's dropped. */

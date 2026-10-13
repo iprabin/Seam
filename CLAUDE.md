@@ -25,7 +25,7 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | Resize by dragging a tiled window's edge (converted to a seam move on mouse up) | `resizeFromEdges` |
 | Drag a window onto another (like Zen browser): edge = split there, middle = swap, blue preview | `mouseDragged`/`mouseUp`/`move` |
 | Float toggle `⌘⌥C` (centres it); dialogs + `floatingApps` always float | `toggleFloat`, `AXUIElement.isStandard` |
-| `⌘⌥ ←→↑↓` move/reorder, `⌃⌥⇧ ←→↑↓` focus, `⌘⇧↩` zoom to whole screen, `⌃⌥ -/=` shrink/grow | `registerHotKeys` |
+| `⌘⌥ ←→↑↓` move/reorder, `⌃⌥⇧ ←→↑↓` focus, `⌘⇧↩` zoom to whole screen (tiled or floating), `⌃⌥ -/=` shrink/grow | `registerHotKeys` |
 | One tree per display; unplugged display's windows move to main | `trees`, `relayout` |
 | Menu bar item: "Retile Everything" (resets state), Quit | bottom of `main.swift` |
 
