@@ -150,13 +150,12 @@ func isStacked(_ root: Node, _ id: Int) -> Bool {
 func unstack(_ root: Node, _ id: Int) -> Node {
     guard isStacked(root, id), var at = path(to: id, in: root), at.popLast() != nil,
           let without = removeLeaf(root, id) else { return root }
-    // what's left of the stack is still at `at`; a row around it takes the window in beside it
+    // what's left of the stack is still at `at`; a row around it takes the window in
+    // beside it, and every column of that row evens out
     let parent = at.dropLast()
-    if let i = at.last, case .split(.row, var children, var sizes)? = node(at: parent, in: without) {
-        sizes[i] /= 2
+    if let i = at.last, case .split(.row, var children, _)? = node(at: parent, in: without) {
         children.insert(.leaf(id), at: i + 1)
-        sizes.insert(sizes[i], at: i + 1)
-        return updating(without, at: parent) { _ in .split(.row, children, sizes) }
+        return updating(without, at: parent) { _ in even(.row, children) }
     }
     return updating(without, at: at[...]) { even(.row, [$0, .leaf(id)]) }
 }
@@ -288,7 +287,7 @@ func treeSelfTest() {
     precondition(removeLeaf(stacked, 3) == two, "closing collapses the split")
     precondition(removeLeaf(.leaf(1), 1) == nil, "last window")
     precondition(path(to: 3, in: stacked) == [1, 1], "path")
-    precondition(unstack(stacked, 3) == .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [0.5, 0.25, 0.25]), "unstack into the row")
+    precondition(unstack(stacked, 3) == .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [1.0 / 3, 1.0 / 3, 1.0 / 3]), "unstack into the row, evened out")
     let column: Node = .split(.column, [.leaf(1), .leaf(2)], [0.5, 0.5])
     precondition(unstack(column, 2) == two, "unstack a stack at the root")
     precondition(unstack(two, 2) == two, "not stacked: nothing to undo")
