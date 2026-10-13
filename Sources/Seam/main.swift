@@ -1,13 +1,9 @@
 import AppKit
 import Carbon.HIToolbox
 
-// Seam: i3-style auto tiling for macOS. Opinionated, no config:
-//   ⌘⌥ ←→↑↓     move the window that way      ⌃⌥⇧ ←→↑↓  focus that way
-//   ⌘⇧ ↩        zoom (whole screen) toggle     ⌘⌥ C      float / tile toggle
-//   ⌘⌥ T        flip group: side by side ⇄ stacked
-//   ⌘⌥ S        stack the next window under this one
-//   ⌃⌥ - / =    shrink / grow                  drag a window's edge to resize
-//   drag a window onto another: an edge splits it there, the middle swaps the two.
+// Seam: i3-style auto tiling for macOS. Opinionated, no config. Every shortcut is
+// ⌘⌥ + a key (see `bindings`, which the menu bar item also lists); drag a window
+// onto another to split or swap, drag a window's edge to resize.
 
 /** Apps that always float: they're small panels, not workspaces. */
 let floatingApps: Set<String> = ["com.apple.systempreferences", "com.apple.calculator"]
@@ -72,7 +68,23 @@ func tileArea(_ screen: NSScreen) -> CGRect { flip(screen.visibleFrame).insetBy(
 
 let axCallback: AXObserverCallback = { _, element, note, _ in tiler.handle(note as String, element) }
 
-var hotKeyActions: [UInt32: () -> Void] = [:]
+struct Binding {
+    let title: String
+    let key: Int
+    /** Carbon modifier bits, as RegisterEventHotKey wants them. */
+    let modifiers: UInt32
+    let action: () -> Void
+
+    var flags: NSEvent.ModifierFlags {
+        [(cmdKey, NSEvent.ModifierFlags.command), (optionKey, .option), (controlKey, .control), (shiftKey, .shift)]
+            .reduce(into: []) { flags, pair in if modifiers & UInt32(pair.0) != 0 { flags.insert(pair.1) } }
+    }
+    var keyEquivalent: String {
+        let arrows = [kVK_LeftArrow: NSLeftArrowFunctionKey, kVK_RightArrow: NSRightArrowFunctionKey, kVK_UpArrow: NSUpArrowFunctionKey, kVK_DownArrow: NSDownArrowFunctionKey]
+        if let arrow = arrows[key] { return String(UnicodeScalar(UInt16(arrow))!) }
+        return [kVK_Return: "\r", kVK_ANSI_S: "s", kVK_ANSI_T: "t", kVK_ANSI_C: "c", kVK_ANSI_Minus: "-", kVK_ANSI_Equal: "="][key] ?? ""
+    }
+}
 
 final class Tiler: NSObject {
     /** One tree per display. */
@@ -457,36 +469,55 @@ final class Tiler: NSObject {
         relayout()
     }
 
+    /** Every shortcut, in the order the menu lists them; `nil` is a separator. */
+    lazy var bindings: [Binding?] = {
+        // ⌘⌥ anchors every shortcut, by the user's choice; ⇧ is the only extra
+        let move = UInt32(cmdKey | optionKey), focus = move | UInt32(shiftKey)
+        let arrows: [(String, Int, Zone)] = [("Left", kVK_LeftArrow, .left), ("Right", kVK_RightArrow, .right), ("Up", kVK_UpArrow, .top), ("Down", kVK_DownArrow, .bottom)]
+        return arrows.map { name, key, zone in Binding(title: "Move \(name)", key: key, modifiers: move) { self.moveFocused(zone) } }
+            + [nil]
+            + arrows.map { name, key, zone in Binding(title: "Focus \(name)", key: key, modifiers: focus) { self.focus(zone) } }
+            + [nil,
+               Binding(title: "Stack Next Window Under", key: kVK_ANSI_S, modifiers: move, action: stackNext),
+               Binding(title: "Flip Side by Side ⇄ Stacked", key: kVK_ANSI_T, modifiers: move, action: flipFocused),
+               Binding(title: "Float / Tile", key: kVK_ANSI_C, modifiers: move, action: toggleFloat),
+               Binding(title: "Whole Screen", key: kVK_Return, modifiers: move, action: toggleZoom),
+               Binding(title: "Shrink", key: kVK_ANSI_Minus, modifiers: move) { self.grow(-0.05) },
+               Binding(title: "Grow", key: kVK_ANSI_Equal, modifiers: move) { self.grow(0.05) }]
+    }()
+
     func registerHotKeys() {
-        let hyper = UInt32(controlKey | optionKey), shift = UInt32(shiftKey)
-        let order = UInt32(cmdKey | optionKey), command = UInt32(cmdKey)
-        let arrows: [(Int, Zone)] = [(kVK_LeftArrow, .left), (kVK_RightArrow, .right), (kVK_UpArrow, .top), (kVK_DownArrow, .bottom)]
-        var bindings: [(Int, UInt32, () -> Void)] = [
-            (kVK_Return, command | shift, toggleZoom),
-            (kVK_ANSI_C, order, toggleFloat),
-            (kVK_ANSI_T, order, flipFocused),
-            (kVK_ANSI_S, order, stackNext),
-            (kVK_ANSI_Minus, hyper, { self.grow(-0.05) }),
-            (kVK_ANSI_Equal, hyper, { self.grow(0.05) }),
-        ]
-        for (key, zone) in arrows {
-            bindings.append((key, order, { self.moveFocused(zone) }))
-            bindings.append((key, hyper | shift, { self.focus(zone) }))
-        }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
             var hotKey = EventHotKeyID()
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKey)
-            hotKeyActions[hotKey.id]?()
+            tiler.bindings[Int(hotKey.id)]?.action()
             return noErr
         }, 1, &spec, nil, nil)
-        for (i, (key, modifiers, action)) in bindings.enumerated() {
+        for (i, binding) in bindings.enumerated() {
+            guard let binding else { continue }
             var ref: EventHotKeyRef?
-            let status = RegisterEventHotKey(UInt32(key), modifiers, EventHotKeyID(signature: OSType(0x5345_414D), id: UInt32(i)), GetApplicationEventTarget(), 0, &ref)
-            if status != noErr { print("Seam: shortcut \(i) is taken, turn it off in Raycast") }
-            hotKeyActions[UInt32(i)] = action
+            let status = RegisterEventHotKey(UInt32(binding.key), binding.modifiers, EventHotKeyID(signature: OSType(0x5345_414D), id: UInt32(i)), GetApplicationEventTarget(), 0, &ref)
+            if status != noErr { print("Seam: \(binding.title) shortcut is taken, turn it off in Raycast") }
         }
     }
+
+    /** The menu lists every shortcut; picking one does it to the focused window. */
+    func addShortcuts(to menu: NSMenu) {
+        for (i, binding) in bindings.enumerated() {
+            guard let binding else { menu.addItem(.separator()); continue }
+            let item = menu.addItem(withTitle: binding.title, action: #selector(runBinding(_:)), keyEquivalent: binding.keyEquivalent)
+            item.keyEquivalentModifierMask = binding.flags
+            item.tag = i
+            item.target = self
+        }
+        menu.addItem(.separator())
+        for hint in ["Drag a window onto another: edge splits, middle swaps", "Drag a window's edge to resize"] {
+            menu.addItem(withTitle: hint, action: nil, keyEquivalent: "").isEnabled = false
+        }
+    }
+
+    @objc func runBinding(_ item: NSMenuItem) { bindings[item.tag]?.action() }
 
     @objc func retile() {
         trees = [:]
@@ -509,6 +540,8 @@ let tiler = Tiler()
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 statusItem.button?.image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "Seam")
 let menu = NSMenu()
+tiler.addShortcuts(to: menu)
+menu.addItem(.separator())
 menu.addItem(withTitle: "Retile Everything", action: #selector(Tiler.retile), keyEquivalent: "").target = tiler
 menu.addItem(.separator())
 menu.addItem(NSMenuItem(title: "Quit Seam", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))

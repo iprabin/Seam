@@ -25,15 +25,15 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | Resize by dragging a tiled window's edge; neighbours follow live | `handle` → `resizeFromEdges` → `shift` |
 | Drag a window onto another (like Zen browser): edge = split there, middle = swap, blue preview | `mouseDragged`/`mouseUp`/`move` |
 | Float toggle `⌘⌥C` (centres it); dialogs + `floatingApps` always float | `toggleFloat`, `AXUIElement.isStandard` |
-| `⌘⌥ ←→↑↓` move/reorder, `⌃⌥⇧ ←→↑↓` focus, `⌘⇧↩` zoom to whole screen (tiled or floating), `⌃⌥ -/=` shrink/grow | `registerHotKeys` |
+| `⌘⌥ ←→↑↓` move/reorder, `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow | `bindings` |
 | `⌘⌥T` flips the focused window's group row ⇄ column (i3 `layout toggle split`) | `flipFocused`, `flipSplit` |
 | `⌘⌥S` pulls the next window in reading order (previous if last) under the focused one | `stackNext` |
 | One tree per display; unplugged display's windows move to main | `trees`, `relayout` |
-| Menu bar item: "Retile Everything" (resets state), Quit | bottom of `main.swift` |
+| Menu bar item lists every shortcut (built from `bindings`, clicking runs it), Retile Everything, Quit | `bindings`, `addShortcuts` |
 
-User picked `⌘⌥` arrows (reorder), `⌘⌥C` (float) and `⌘⇧↩` (zoom); the rest mirror Raycast's `⌃⌥` window keys. These are
-system-wide, so they shadow app shortcuts (e.g. ⌘⌥←→ tab switching in browsers). Raycast's
-bindings must be turned off or `RegisterEventHotKey` fails (logged as "shortcut is taken").
+**Every shortcut is ⌘⌥ + key** (user's rule; ⇧ is the only extra modifier allowed). They are
+system-wide, so they shadow app shortcuts (e.g. ⌘⌥←→ tab switching in browsers). Any other app
+holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is taken").
 
 ## Architecture (2 files)
 
