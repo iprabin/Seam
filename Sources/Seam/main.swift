@@ -4,6 +4,7 @@ import Carbon.HIToolbox
 // Seam: i3-style auto tiling for macOS. Opinionated, no config:
 //   ⌘⌥ ←→↑↓     move the window that way      ⌃⌥⇧ ←→↑↓  focus that way
 //   ⌘⇧ ↩        zoom (whole screen) toggle     ⌘⌥ C      float / tile toggle
+//   ⌘⌥ T        flip group: side by side ⇄ stacked
 //   ⌃⌥ - / =    shrink / grow                  drag a window's edge to resize
 //   drag a window onto another: an edge splits it there, the middle swaps the two.
 
@@ -397,6 +398,13 @@ final class Tiler: NSObject {
         relayout()
     }
 
+    /** Flips the focused window's group between side by side and stacked. */
+    func flipFocused() {
+        guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key], var at = path(to: id, in: tree), at.popLast() != nil else { return }
+        trees[key] = flipSplit(tree, at: at[...])
+        relayout()
+    }
+
     /** Grows the focused window's share in its split; the others give way evenly. */
     func grow(_ by: Double) {
         guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key], var at = path(to: id, in: tree), let i = at.popLast() else { return }
@@ -415,6 +423,7 @@ final class Tiler: NSObject {
         var bindings: [(Int, UInt32, () -> Void)] = [
             (kVK_Return, command | shift, toggleZoom),
             (kVK_ANSI_C, order, toggleFloat),
+            (kVK_ANSI_T, order, flipFocused),
             (kVK_ANSI_Minus, hyper, { self.grow(-0.05) }),
             (kVK_ANSI_Equal, hyper, { self.grow(0.05) }),
         ]

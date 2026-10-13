@@ -120,6 +120,15 @@ func updatingSizes(_ node: Node, at path: ArraySlice<Int>, _ change: (inout [Dou
     return .split(dir, children, sizes)
 }
 
+/** Turns the split at `path` from a row into a column or back, like i3's `layout toggle split`. */
+func flipSplit(_ node: Node, at path: ArraySlice<Int>) -> Node {
+    guard case let .split(dir, children, sizes) = node else { return node }
+    guard let first = path.first else { return .split(dir == .row ? .column : .row, children, sizes) }
+    var children_ = children
+    children_[first] = flipSplit(children[first], at: path.dropFirst())
+    return .split(dir, children_, sizes)
+}
+
 /** Between visible children `a` and `b` of the split at `path`. */
 struct SeamInfo {
     var path: [Int]
@@ -209,6 +218,8 @@ func treeSelfTest() {
     precondition(removeLeaf(stacked, 3) == two, "closing collapses the split")
     precondition(removeLeaf(.leaf(1), 1) == nil, "last window")
     precondition(path(to: 3, in: stacked) == [1, 1], "path")
+    precondition(flipSplit(stacked, at: [1]) == .split(.row, [.leaf(1), .split(.row, [.leaf(2), .leaf(3)], [0.5, 0.5])], [0.5, 0.5]), "flip inner split")
+    precondition(flipSplit(two, at: []) == .split(.column, [.leaf(1), .leaf(2)], [0.5, 0.5]), "flip root")
 
     let area = CGRect(x: 0, y: 0, width: 200 + gap, height: 100)
     var out = Layout()
