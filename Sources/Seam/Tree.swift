@@ -61,6 +61,14 @@ func swapLeaves(_ node: Node, _ a: Int, _ b: Int) -> Node {
     }
 }
 
+/** Swaps two windows, and their shares too when they sit in the same split, so each keeps its size. */
+func swapPlaces(_ root: Node, _ a: Int, _ b: Int) -> Node {
+    let swapped = swapLeaves(root, a, b)
+    guard var pa = path(to: a, in: root), var pb = path(to: b, in: root),
+          let i = pa.popLast(), let j = pb.popLast(), pa == pb else { return swapped }
+    return updatingSizes(swapped, at: pa[...]) { $0.swapAt(i, j) }
+}
+
 /**
  * Window `id` beside `target` on `zone`'s side. Inside a split that already
  * runs that way it joins it and halves the target's share; otherwise the
@@ -247,6 +255,9 @@ func treeSelfTest() {
     precondition(removeLeaf(stacked, 3) == two, "closing collapses the split")
     precondition(removeLeaf(.leaf(1), 1) == nil, "last window")
     precondition(path(to: 3, in: stacked) == [1, 1], "path")
+    let uneven: Node = .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [0.5, 0.3, 0.2])
+    precondition(swapPlaces(uneven, 1, 3) == .split(.row, [.leaf(3), .leaf(2), .leaf(1)], [0.2, 0.3, 0.5]), "sizes travel with windows")
+    precondition(swapPlaces(stacked, 1, 3) == swapLeaves(stacked, 1, 3), "different splits keep the slots")
     precondition(flipSplit(stacked, at: [1]) == .split(.row, [.leaf(1), .split(.row, [.leaf(2), .leaf(3)], [0.5, 0.5])], [0.5, 0.5]), "flip inner split")
     precondition(flipSplit(two, at: []) == .split(.column, [.leaf(1), .leaf(2)], [0.5, 0.5]), "flip root")
 

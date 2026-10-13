@@ -310,7 +310,7 @@ final class Tiler: NSObject {
         guard let from = treeKey(of: id), let to = treeKey(of: target) else { return }
         if zone == .center {
             // each tree holds one of the two, so this swaps across displays too
-            trees = trees.mapValues { swapLeaves($0, id, target) }
+            trees = trees.mapValues { swapPlaces($0, id, target) }
         } else if from == to {
             trees[to] = dropLeaf(trees[to]!, id, target, zone)
         } else {
