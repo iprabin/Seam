@@ -100,4 +100,61 @@ extension Tiler {
         window.isReleasedWhenClosed = false
         return window
     }
+
+    /** The outline round the focused tile. */
+    static func makeBorder() -> NSWindow {
+        let window = makeOverlay()
+        window.backgroundColor = .clear
+        window.contentView = Outline()
+        return window
+    }
+}
+
+/**
+ * A rounded rainbow line just inside its bounds, its colours running round it:
+ * a colour wheel spins behind the line, which masks all but the line.
+ */
+final class Outline: NSView {
+    let ring = CALayer(), wheel = CAGradientLayer(), line = CAShapeLayer()
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        // red again at the end so the wheel has no seam
+        wheel.colors = [NSColor.systemRed, .systemOrange, .systemYellow, .systemGreen, .systemBlue, .systemPurple, .systemRed].map(\.cgColor)
+        wheel.type = .conic
+        wheel.startPoint = CGPoint(x: 0.5, y: 0.5)
+        wheel.endPoint = CGPoint(x: 0.5, y: 0)
+        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        spin.fromValue = 0
+        spin.toValue = -2 * Double.pi
+        spin.duration = 4
+        spin.repeatCount = .infinity
+        spin.isRemovedOnCompletion = false
+        wheel.add(spin, forKey: "spin")
+        line.lineWidth = 2
+        line.fillColor = nil
+        line.strokeColor = NSColor.black.cgColor
+        ring.mask = line
+        ring.addSublayer(wheel)
+        layer?.addSublayer(ring)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        // snap to the new tile rather than animating there
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ring.frame = bounds
+        // a square wide enough to cover the corners whichever way it's turned
+        let side = hypot(bounds.width, bounds.height)
+        wheel.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+        wheel.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        // ponytail: windows don't expose their corner radius, and it varies by app
+        // and macOS version; 16 matches most, tune it if they don't line up
+        line.path = CGPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), cornerWidth: 15, cornerHeight: 15, transform: nil)
+        CATransaction.commit()
+    }
 }

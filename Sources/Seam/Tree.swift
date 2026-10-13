@@ -162,6 +162,12 @@ func unstack(_ root: Node, _ id: Int) -> Node {
     return updating(without, at: at[...]) { even(.row, left ? [.leaf(id), $0] : [$0, .leaf(id)]) }
 }
 
+/** Every split shares out evenly, like i3's `balance`. */
+func balanced(_ node: Node) -> Node {
+    guard case let .split(dir, children, _) = node else { return node }
+    return even(dir, children.map(balanced))
+}
+
 /** Turns the split at `path` from a row into a column or back, like i3's `layout toggle split`. */
 func flipSplit(_ node: Node, at path: ArraySlice<Int>) -> Node {
     guard case .split(let dir, var children, let sizes) = node else { return node }
@@ -296,6 +302,8 @@ func treeSelfTest() {
     precondition(unstack(stacked, 2) == .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [1.0 / 3, 1.0 / 3, 1.0 / 3]), "top of an inner stack goes left of it")
     precondition(unstack(two, 2) == two, "not stacked: nothing to undo")
     let uneven: Node = .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [0.5, 0.3, 0.2])
+    let nested: Node = .split(.row, [.leaf(4), .split(.column, [.leaf(5), .leaf(6)], [0.9, 0.1])], [0.8, 0.2])
+    precondition(balanced(nested) == .split(.row, [.leaf(4), .split(.column, [.leaf(5), .leaf(6)], [0.5, 0.5])], [0.5, 0.5]), "balance evens every split")
     precondition(swapPlaces(uneven, 1, 3) == .split(.row, [.leaf(3), .leaf(2), .leaf(1)], [0.2, 0.3, 0.5]), "sizes travel with windows")
     precondition(swapPlaces(stacked, 1, 3) == swapLeaves(stacked, 1, 3), "different splits keep the slots")
     precondition(flipSplit(stacked, at: [1]) == .split(.row, [.leaf(1), .split(.row, [.leaf(2), .leaf(3)], [0.5, 0.5])], [0.5, 0.5]), "flip inner split")

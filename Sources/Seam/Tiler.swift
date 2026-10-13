@@ -29,6 +29,7 @@ final class Tiler: NSObject {
     var resizing: Int?
     var drop: (target: Int, zone: Zone)?
     let overlay = Tiler.makeOverlay()
+    let border = Tiler.makeBorder()
 
     func start() {
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1)
@@ -36,6 +37,7 @@ final class Tiler: NSObject {
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification] {
             workspace.addObserver(forName: name, object: nil, queue: .main) { _ in self.sync() }
         }
+        workspace.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in self.showFocus() }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in self.relayout() }
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDragged) { _ in self.mouseDragged() }
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { _ in self.mouseUp() }
@@ -113,6 +115,7 @@ final class Tiler: NSObject {
             guard let id = element.windowID else { return }
             if windows[id] == nil { sync() }
             if treeKey(of: id) != nil { lastFocus = id }
+            showFocus()
         default:
             sync()
             // a new or restored window may not be on screen for a moment yet
@@ -181,6 +184,16 @@ final class Tiler: NSObject {
         settle = check
         // some apps take a moment to resize; reading straight away mistakes that for a minimum
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: check)
+        showFocus()
+    }
+
+    /** Outlines the focused tile: with no gaps, nothing else shows which one it is. */
+    func showFocus() {
+        guard let id = focusedID(), id != zoomed, let rect = layouts.values.lazy.compactMap({ $0.panes[id] }).first else {
+            return border.orderOut(nil)
+        }
+        border.setFrame(flip(rect), display: true)
+        border.orderFrontRegardless()
     }
 
     /**

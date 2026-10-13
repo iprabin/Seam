@@ -15,7 +15,7 @@ struct Binding {
     var keyEquivalent: String {
         let arrows = [kVK_LeftArrow: NSLeftArrowFunctionKey, kVK_RightArrow: NSRightArrowFunctionKey, kVK_UpArrow: NSUpArrowFunctionKey, kVK_DownArrow: NSDownArrowFunctionKey]
         if let arrow = arrows[key] { return String(UnicodeScalar(UInt16(arrow))!) }
-        return [kVK_Return: "\r", kVK_ANSI_S: "s", kVK_ANSI_T: "t", kVK_ANSI_C: "c", kVK_ANSI_Minus: "-", kVK_ANSI_Equal: "="][key] ?? ""
+        return [kVK_Return: "\r", kVK_ANSI_S: "s", kVK_ANSI_T: "t", kVK_ANSI_C: "c", kVK_ANSI_Minus: "-", kVK_ANSI_Equal: "=", kVK_ANSI_0: "0"][key] ?? ""
     }
 }
 
@@ -153,6 +153,14 @@ extension Tiler {
         relayout()
     }
 
+    /** Evens out every split on the focused window's display; squeezed windows get their minimums back. */
+    func balance() {
+        guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key] else { return }
+        trees[key] = balanced(tree)
+        squeezed.subtract(leaves(tree))
+        relayout()
+    }
+
     /** Every shortcut, in the order the menu lists them; `nil` is a separator. */
     var bindings: [Binding?] {
         // ⌘⌥ anchors every shortcut, by the user's choice; ⇧ is the only extra
@@ -167,7 +175,8 @@ extension Tiler {
                Binding(title: "Float / Tile", key: kVK_ANSI_C, modifiers: move, action: toggleFloat),
                Binding(title: "Whole Screen", key: kVK_Return, modifiers: move, action: toggleZoom),
                Binding(title: "Shrink", key: kVK_ANSI_Minus, modifiers: move) { self.grow(-0.1) },
-               Binding(title: "Grow", key: kVK_ANSI_Equal, modifiers: move) { self.grow(0.1) }]
+               Binding(title: "Grow", key: kVK_ANSI_Equal, modifiers: move) { self.grow(0.1) },
+               Binding(title: "Even Out", key: kVK_ANSI_0, modifiers: move, action: balance)]
     }
 
     func registerHotKeys() {

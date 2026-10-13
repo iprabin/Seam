@@ -28,6 +28,8 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | `⌘⌥ ←→↑↓` swap places with the window that way (each keeps its size when in the same row/stack, `swapPlaces`), `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow width by 10% of its row, down to its min / up to the others at theirs (`grow`; height in a stack only if no row) | `bindings` |
 | `⌘⌥T` flips the focused window's group row ⇄ column (i3 `layout toggle split`) | `flipFocused`, `flipSplit` |
 | `⌘⌥S` toggles: pulls the next window in reading order (previous if last) under the focused one; on a stacked window, takes it out beside the stack and evens out that row's widths | `stackNext`, `unstack` |
+| `⌘⌥0` evens out every split on the focused window's display (i3 `balance`) and un-squeezes them | `balance`, `balanced` |
+| Rainbow outline, colours circling it (spinning conic gradient, 4s a turn;  2px, rounded 16 like windows; user wanted it fun) round the focused tile, since zero gaps hide it; none when zoomed or floating | `showFocus`, `border` |
 | One tree per display; unplugged display's windows move to main | `trees`, `relayout` |
 | Menu bar item lists every shortcut (built from `bindings`, clicking runs it), Retile Everything, Quit | `bindings`, `addShortcuts` |
 
