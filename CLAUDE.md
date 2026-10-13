@@ -25,12 +25,12 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | Resize by dragging a tiled window's edge (converted to a seam move on mouse up) | `resizeFromEdges` |
 | Drag a window onto another (like Zen browser): edge = split there, middle = swap, blue preview | `mouseDragged`/`mouseUp`/`move` |
 | Float toggle `⌘⌥C` (centres it); dialogs + `floatingApps` always float | `toggleFloat`, `AXUIElement.isStandard` |
-| `⌘⌥ ←→↑↓` move/reorder, `⌃⌥⇧ ←→↑↓` focus, `⌘↩` zoom to whole screen, `⌃⌥ -/=` shrink/grow | `registerHotKeys` |
+| `⌘⌥ ←→↑↓` move/reorder, `⌃⌥⇧ ←→↑↓` focus, `⌘⇧↩` zoom to whole screen, `⌃⌥ -/=` shrink/grow | `registerHotKeys` |
 | One tree per display; unplugged display's windows move to main | `trees`, `relayout` |
 | Menu bar item: "Retile Everything" (resets state), Quit | bottom of `main.swift` |
 
-User picked `⌘⌥` arrows (reorder), `⌘⌥C` (float) and `⌘↩` (zoom); the rest mirror Raycast's `⌃⌥` window keys. These are
-system-wide, so they shadow app shortcuts (e.g. ⌘↩ send in chat apps, ⌘⌥←→ tab switching in browsers). Raycast's
+User picked `⌘⌥` arrows (reorder), `⌘⌥C` (float) and `⌘⇧↩` (zoom); the rest mirror Raycast's `⌃⌥` window keys. These are
+system-wide, so they shadow app shortcuts (e.g. ⌘⌥←→ tab switching in browsers). Raycast's
 bindings must be turned off or `RegisterEventHotKey` fails (logged as "shortcut is taken").
 
 ## Architecture (2 files)
