@@ -35,14 +35,19 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 system-wide, so they shadow app shortcuts (e.g. ⌘⌥←→ tab switching in browsers). Any other app
 holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is taken").
 
-## Architecture (2 files)
+## Architecture
 
 - `Sources/Seam/Tree.swift`: pure, no AppKit. Port of
   `~/Desktop/Mobile/manga-reader/src/components/tiling/tree.ts` (same semantics, keep them in sync
   conceptually). `Node` = leaf(windowID) | split(dir, children, shares summing to 1).
   `layout()` gives hidden windows zero room but keeps their place, so seam paths always index the
   *real* tree. `treeSelfTest()` holds the asserts; add one there for any tree change.
-- `Sources/Seam/main.swift`: everything with side effects.
+- Side effects, split by concern (`Tiler` is one class, extended per file):
+  - `AX.swift`: `AXUIElement` helpers, coordinate `flip()`, screen lookups.
+  - `Tiler.swift`: state, window discovery (`sync`), `relayout`, min-size learning.
+  - `Tiler+Mouse.swift`: drag-to-move/split, edge resize, drop preview.
+  - `Tiler+Keys.swift`: `Binding`, keyboard actions, hotkey + menu registration.
+  - `main.swift`: `--selftest`, menu bar item, Accessibility prompt, run loop.
   - Window identity = `CGWindowID` via private `_AXUIElementGetWindow`.
   - `sync()` rescans all regular apps' AX windows (add new, forget gone), then `relayout()`.
     Called on almost any AX notification; cheap enough, simple and self-healing.
