@@ -2,8 +2,8 @@ import AppKit
 import Carbon.HIToolbox
 
 // Seam: i3-style auto tiling for macOS. Opinionated, no config:
-//   ⌃⌥ ←→↑↓     move the window that way      ⌃⌥⇧ ←→↑↓  focus that way
-//   ⌃⌥ ↩        zoom (maximise) toggle         ⌃⌥ C      float / tile toggle
+//   ⌘⌥ ←→↑↓     move the window that way      ⌃⌥⇧ ←→↑↓  focus that way
+//   ⌘ ↩         zoom (whole screen) toggle     ⌃⌥ C      float / tile toggle
 //   ⌃⌥ - / =    shrink / grow                  drag a seam, or a window edge, to resize
 //   drag a window onto another: an edge splits it there, the middle swaps the two.
 
@@ -432,15 +432,16 @@ final class Tiler: NSObject {
 
     func registerHotKeys() {
         let hyper = UInt32(controlKey | optionKey), shift = UInt32(shiftKey)
+        let order = UInt32(cmdKey | optionKey), command = UInt32(cmdKey)
         let arrows: [(Int, Zone)] = [(kVK_LeftArrow, .left), (kVK_RightArrow, .right), (kVK_UpArrow, .top), (kVK_DownArrow, .bottom)]
         var bindings: [(Int, UInt32, () -> Void)] = [
-            (kVK_Return, hyper, toggleZoom),
+            (kVK_Return, command, toggleZoom),
             (kVK_ANSI_C, hyper, toggleFloat),
             (kVK_ANSI_Minus, hyper, { self.grow(-0.05) }),
             (kVK_ANSI_Equal, hyper, { self.grow(0.05) }),
         ]
         for (key, zone) in arrows {
-            bindings.append((key, hyper, { self.moveFocused(zone) }))
+            bindings.append((key, order, { self.moveFocused(zone) }))
             bindings.append((key, hyper | shift, { self.focus(zone) }))
         }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
