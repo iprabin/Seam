@@ -4,6 +4,7 @@ extension Tiler {
     // MARK: mouse
 
     func mouseDragged() {
+        mouseMoved = true
         guard let dragging else { return }
         let point = mouseAX()
         for layout in layouts.values {
@@ -20,6 +21,7 @@ extension Tiler {
     }
 
     func mouseUp() {
+        mouseMoved = false
         guard dragging != nil || resizing != nil else { return }
         if let id = dragging, let drop { move(id, onto: drop.target, drop.zone) }
         if let id = resizing { resizeFromEdges(id) }
@@ -106,6 +108,8 @@ extension Tiler {
         let window = makeOverlay()
         window.backgroundColor = .clear
         window.contentView = Outline()
+        // belongs to one Space, so it slides away with the windows on a switch; shown again after
+        window.collectionBehavior = [.moveToActiveSpace, .transient]
         return window
     }
 }

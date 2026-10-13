@@ -77,5 +77,6 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
   real); Retile Everything clears them all. `⌘⌥=` marks the row's other windows `squeezed`:
   their app minimums are ignored (floor `minPane` only), so they run on under the focused window;
   `⌘⌥-` un-squeezes them. Otherwise, if the minimums add up to more than the screen, windows still overlap.
-- No persistence across restarts.
+- The trees persist in UserDefaults (`trees`, saved each `relayout`) by `CGWindowID`, which lives as long as
+  the window, so restarting Seam keeps the layout; after a reboot/app relaunch IDs are new and windows re-tile.
 - Not tested yet on real windows by the user at time of writing (2026-10-13): first feedback pending.

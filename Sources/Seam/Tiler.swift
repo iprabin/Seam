@@ -27,6 +27,8 @@ final class Tiler: NSObject {
     /** A tiled window the user is moving or resizing with the mouse. */
     var dragging: Int?
     var resizing: Int?
+    /** The mouse has moved with the button down: a plain click doesn't. */
+    var mouseMoved = false
     var drop: (target: Int, zone: Zone)?
     let overlay = Tiler.makeOverlay()
     let border = Tiler.makeBorder()
@@ -34,14 +36,24 @@ final class Tiler: NSObject {
     func start() {
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1)
         let workspace = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification] {
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             workspace.addObserver(forName: name, object: nil, queue: .main) { _ in self.sync() }
+        }
+        workspace.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { _ in
+            // the switch is done: bring the outline over, the slow AX rescan can wait a frame
+            self.border.orderOut(nil)
+            self.border.alphaValue = 0
+            self.relayout()
+            NSAnimationContext.runAnimationGroup { $0.duration = 0.25; self.border.animator().alphaValue = 1 }
+            DispatchQueue.main.async { self.sync() }
         }
         workspace.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in self.showFocus() }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in self.relayout() }
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDragged) { _ in self.mouseDragged() }
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { _ in self.mouseUp() }
         registerHotKeys()
+        // the layout from the last run; windows closed since are dropped by sync
+        if let saved = UserDefaults.standard.data(forKey: "trees") { trees = (try? JSONDecoder().decode([CGDirectDisplayID: Node].self, from: saved)) ?? [:] }
         sync()
     }
 
@@ -61,7 +73,7 @@ final class Tiler: NSObject {
                 if windows[id] != nil { continue }
                 windows[id] = window
                 watch(window, pid)
-                if window.isStandard && !floatingApps.contains(app.bundleIdentifier ?? "") { tile(id, near: lastFocus) }
+                if treeKey(of: id) == nil, window.isStandard && !floatingApps.contains(app.bundleIdentifier ?? "") { tile(id, near: lastFocus) }
             }
         }
         let live = Set(apps.map(\.processIdentifier))
@@ -72,7 +84,7 @@ final class Tiler: NSObject {
         // Accessibility only lists the current Space's windows; one still in the
         // window server is on another Space, so it keeps its place (zero room here)
         let existing = windowIDs([.optionAll])
-        for id in Array(windows.keys) where !seen.contains(id) && !existing.contains(id) { forget(id) }
+        for id in Set(windows.keys).union(trees.values.flatMap(leaves)) where !seen.contains(id) && !existing.contains(id) { forget(id) }
         relayout()
     }
 
@@ -98,8 +110,10 @@ final class Tiler: NSObject {
         switch note {
         case kAXWindowMovedNotification, kAXWindowResizedNotification:
             // Only the user's own drag of one window: ours happen with the mouse
-            // up, or are the neighbours given way to a live edge resize.
-            guard NSEvent.pressedMouseButtons & 1 != 0, let id = element.windowID, id != zoomed, treeKey(of: id) != nil,
+            // up, or are the neighbours given way to a live edge resize. A click
+            // (switching window) can land mid-relayout, or on an app snapping its
+            // size (Terminal's character grid): that's not a resize.
+            guard NSEvent.pressedMouseButtons & 1 != 0, mouseMoved, let id = element.windowID, id != zoomed, treeKey(of: id) != nil,
                   (resizing ?? dragging ?? id) == id else { return }
             if note == kAXWindowResizedNotification {
                 resizing = id
@@ -178,6 +192,8 @@ final class Tiler: NSObject {
             layouts[key] = out
             for (id, rect) in out.panes where place(id, id == zoomed ? area : rect) && id != zoomed { placed.append(id) }
         }
+        // window IDs outlive Seam, so a restart can put everything back
+        UserDefaults.standard.set(try? JSONEncoder().encode(trees), forKey: "trees")
         unsettled.formUnion(placed)
         settle?.cancel()
         let check = DispatchWorkItem { self.learnMinSizes() }
