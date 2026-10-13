@@ -12,6 +12,8 @@ final class Tiler: NSObject {
     var windows: [Int: AXUIElement] = [:]
     /** The frame each tile was last given, so unchanged ones aren't touched. */
     var applied: [Int: CGRect] = [:]
+    /** The trees as last written to UserDefaults. */
+    var saved: [CGDirectDisplayID: Node] = [:]
     var observers: [pid_t: AXObserver] = [:]
     var lastFocus: Int?
     var zoomed: Int?
@@ -180,7 +182,9 @@ final class Tiler: NSObject {
             for id in leaves(tree) { trees[main] = trees[main].map { appendLeaf($0, id) } ?? .leaf(id) }
         }
         let onScreen = windowIDs([.optionOnScreenOnly, .excludeDesktopElements])
-        let visible = { (id: Int) in onScreen.contains(id) && self.windows[id]?.isFullScreen != true }
+        // asked once per window: an Accessibility call each, and layout asks many times
+        let shown = Set(windows.filter { onScreen.contains($0.key) && !$0.value.isFullScreen }.keys)
+        let visible = { (id: Int) in shown.contains(id) }
         layouts = [:]
         var placed: [Int] = []
         for screen in screens {
@@ -193,7 +197,10 @@ final class Tiler: NSObject {
             for (id, rect) in out.panes where place(id, id == zoomed ? area : rect) && id != zoomed { placed.append(id) }
         }
         // window IDs outlive Seam, so a restart can put everything back
-        UserDefaults.standard.set(try? JSONEncoder().encode(trees), forKey: "trees")
+        if trees != saved {
+            UserDefaults.standard.set(try? JSONEncoder().encode(trees), forKey: "trees")
+            saved = trees
+        }
         unsettled.formUnion(placed)
         settle?.cancel()
         let check = DispatchWorkItem { self.learnMinSizes() }
