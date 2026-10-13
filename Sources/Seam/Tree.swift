@@ -122,11 +122,10 @@ func updatingSizes(_ node: Node, at path: ArraySlice<Int>, _ change: (inout [Dou
 
 /** Turns the split at `path` from a row into a column or back, like i3's `layout toggle split`. */
 func flipSplit(_ node: Node, at path: ArraySlice<Int>) -> Node {
-    guard case let .split(dir, children, sizes) = node else { return node }
+    guard case .split(let dir, var children, let sizes) = node else { return node }
     guard let first = path.first else { return .split(dir == .row ? .column : .row, children, sizes) }
-    var children_ = children
-    children_[first] = flipSplit(children[first], at: path.dropFirst())
-    return .split(dir, children_, sizes)
+    children[first] = flipSplit(children[first], at: path.dropFirst())
+    return .split(dir, children, sizes)
 }
 
 /** Between visible children `a` and `b` of the split at `path`. */
