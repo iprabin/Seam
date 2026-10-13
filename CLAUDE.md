@@ -10,6 +10,7 @@ Don't add a config file or settings UI unless the user asks.
 swift build && .build/debug/Seam --selftest   # tree logic self-check, prints "selftest ok"
 ./build.sh                                     # release build → build/Seam.app, signed with Apple Development cert
 open build/Seam.app                            # needs Accessibility permission (prompts once)
+swift icon.swift                               # redraw icon.png (build.sh makes the .icns from it)
 ```
 
 Signing with the dev cert (not ad-hoc) keeps the Accessibility grant across rebuilds.
