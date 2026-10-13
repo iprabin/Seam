@@ -67,9 +67,10 @@ final class Tiler: NSObject {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
             observers[pid] = nil
         }
-        // ponytail: Accessibility only lists the current Space's windows, so one
-        // on another Space is forgotten and re-tiled when you come back
-        for id in Array(windows.keys) where !seen.contains(id) { forget(id) }
+        // Accessibility only lists the current Space's windows; one still in the
+        // window server is on another Space, so it keeps its place (zero room here)
+        let existing = windowIDs([.optionAll])
+        for id in Array(windows.keys) where !seen.contains(id) && !existing.contains(id) { forget(id) }
         relayout()
     }
 
@@ -147,8 +148,8 @@ final class Tiler: NSObject {
         squeezed.remove(id)
     }
 
-    func onScreenIDs() -> Set<Int> {
-        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    func windowIDs(_ options: CGWindowListOption) -> Set<Int> {
+        let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
         return Set(list.compactMap { $0[kCGWindowNumber as String] as? Int })
     }
 
@@ -161,7 +162,7 @@ final class Tiler: NSObject {
             let main = key(screens[0])
             for id in leaves(tree) { trees[main] = trees[main].map { appendLeaf($0, id) } ?? .leaf(id) }
         }
-        let onScreen = onScreenIDs()
+        let onScreen = windowIDs([.optionOnScreenOnly, .excludeDesktopElements])
         let visible = { (id: Int) in onScreen.contains(id) && self.windows[id]?.isFullScreen != true }
         layouts = [:]
         var placed: [Int] = []

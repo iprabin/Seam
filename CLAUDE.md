@@ -66,7 +66,7 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
 
 ## Known limits / next ideas
 
-- Windows on other Spaces aren't listed by AX → forgotten and re-tiled on return (marked `ponytail:`).
+- Windows on other Spaces aren't listed by AX; `sync` keeps them while the window server (`CGWindowList .optionAll`) still has them, so they hold their place (one tree per display spans all its Spaces; each Space shows its own windows from it).
 - No animation; frames snap.
 - Apps with a minimum size: 0.3s after a relayout, `learnMinSizes` notices a window that came out
   bigger than its tile (read later because some apps resize late; reading at once learned bogus
