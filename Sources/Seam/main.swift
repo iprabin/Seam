@@ -346,6 +346,8 @@ final class Tiler: NSObject {
             window.isOpaque = false
             window.backgroundColor = .clear
             window.hasShadow = false
+            // below every app window: tiles leave the gap free, a floating window covers it
+            window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
             window.collectionBehavior = [.canJoinAllSpaces, .stationary]
             window.isReleasedWhenClosed = false
             window.contentView = SeamView()
