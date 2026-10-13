@@ -4,7 +4,7 @@ import Carbon.HIToolbox
 // Seam: i3-style auto tiling for macOS. Opinionated, no config:
 //   ⌘⌥ ←→↑↓     move the window that way      ⌃⌥⇧ ←→↑↓  focus that way
 //   ⌘⇧ ↩        zoom (whole screen) toggle     ⌘⌥ C      float / tile toggle
-//   ⌃⌥ - / =    shrink / grow                  drag a seam, or a window edge, to resize
+//   ⌃⌥ - / =    shrink / grow                  drag a window's edge to resize
 //   drag a window onto another: an edge splits it there, the middle swaps the two.
 
 /** Apps that always float: they're small panels, not workspaces. */
@@ -88,9 +88,7 @@ final class Tiler: NSObject {
     var dragging: Int?
     var resizing: Int?
     var drop: (target: Int, zone: Zone)?
-    var seamDrag: (screen: CGDirectDisplayID, seam: SeamInfo, start: CGPoint, before: Double, after: Double)?
     let overlay = Tiler.makeOverlay()
-    var handles: [NSWindow] = []
 
     func start() {
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1)
@@ -156,11 +154,17 @@ final class Tiler: NSObject {
     func handle(_ note: String, _ element: AXUIElement) {
         switch note {
         case kAXWindowMovedNotification, kAXWindowResizedNotification:
-            // Only the user's own drags: ours happen with the mouse up, or on a seam.
-            guard NSEvent.pressedMouseButtons & 1 != 0, seamDrag == nil, let id = element.windowID, id != zoomed, treeKey(of: id) != nil else { return }
+            // Only the user's own drag of one window: ours happen with the mouse
+            // up, or are the neighbours given way to a live edge resize.
+            guard NSEvent.pressedMouseButtons & 1 != 0, let id = element.windowID, id != zoomed, treeKey(of: id) != nil,
+                  (resizing ?? dragging ?? id) == id else { return }
             if note == kAXWindowResizedNotification {
                 resizing = id
                 dragging = nil
+                drop = nil
+                overlay.orderOut(nil)
+                // the neighbours follow the edge as it's dragged
+                resizeFromEdges(id)
             } else if resizing == nil {
                 dragging = id
             }
@@ -227,7 +231,6 @@ final class Tiler: NSObject {
             layouts[key] = out
             for (id, rect) in out.panes { place(id, id == zoomed ? area : rect) }
         }
-        showHandles()
     }
 
     func place(_ id: Int, _ rect: CGRect) {
@@ -298,18 +301,6 @@ final class Tiler: NSObject {
         }
     }
 
-    func beginSeamDrag(_ screen: CGDirectDisplayID, _ seam: SeamInfo) {
-        guard let shares = trees[screen].flatMap({ sizes(at: seam.path[...], in: $0) }) else { return }
-        seamDrag = (screen, seam, NSEvent.mouseLocation, shares[seam.a], shares[seam.b])
-    }
-
-    func moveSeam() {
-        guard let drag = seamDrag else { return }
-        let now = NSEvent.mouseLocation
-        let px = drag.seam.dir == .row ? now.x - drag.start.x : drag.start.y - now.y
-        shift(drag.screen, drag.seam, before: drag.before, after: drag.after, by: px)
-    }
-
     /** Trades `px` of room between the seam's two sides; both stop at their minimums. */
     func shift(_ screen: CGDirectDisplayID, _ seam: SeamInfo, before: Double, after: Double, by px: CGFloat) {
         let pair = before + after
@@ -324,7 +315,7 @@ final class Tiler: NSObject {
         relayout()
     }
 
-    // MARK: seam handles and the drop preview
+    // MARK: the drop preview
 
     static func makeOverlay() -> NSWindow {
         let window = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
@@ -336,32 +327,6 @@ final class Tiler: NSObject {
         window.collectionBehavior = [.canJoinAllSpaces, .transient]
         window.isReleasedWhenClosed = false
         return window
-    }
-
-    /** A small window in each seam's gap that resizes its two sides when dragged. */
-    func showHandles() {
-        let zoomedScreen = zoomed.flatMap(treeKey)
-        let seams = layouts.sorted { $0.key < $1.key }
-            .filter { $0.key != zoomedScreen }
-            .flatMap { screen, layout in layout.seams.map { (screen, $0) } }
-        while handles.count < seams.count {
-            let window = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            window.hasShadow = false
-            // below every app window: tiles leave the gap free, a floating window covers it
-            window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
-            window.collectionBehavior = [.canJoinAllSpaces, .stationary]
-            window.isReleasedWhenClosed = false
-            window.contentView = SeamView()
-            handles.append(window)
-        }
-        for (i, window) in handles.enumerated() {
-            guard i < seams.count else { window.orderOut(nil); continue }
-            (window.contentView as! SeamView).target = seams[i]
-            window.setFrame(flip(seams[i].1.rect), display: true)
-            window.orderFrontRegardless()
-        }
     }
 
     // MARK: keyboard
@@ -376,7 +341,7 @@ final class Tiler: NSObject {
     /** The tile just past `id`'s edge on `zone`'s side, on any display. */
     func neighbour(_ id: Int, _ zone: Zone) -> Int? {
         guard let key = treeKey(of: id), let r = layouts[key]?.panes[id] else { return nil }
-        let reach = gap * 3
+        let reach: CGFloat = 10
         let point: CGPoint = switch zone {
         case .left: CGPoint(x: r.minX - reach, y: r.midY)
         case .right: CGPoint(x: r.maxX + reach, y: r.midY)
@@ -478,40 +443,6 @@ final class Tiler: NSObject {
         applied = [:]
         zoomed = nil
         sync()
-    }
-}
-
-/** Draws a faint grip and turns drags into seam moves. */
-final class SeamView: NSView {
-    var target: (CGDirectDisplayID, SeamInfo)?
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseEntered(with event: NSEvent) {
-        (target?.1.dir == .row ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).set()
-    }
-    override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
-    override func mouseDown(with event: NSEvent) {
-        if let (screen, seam) = target { tiler.beginSeamDrag(screen, seam) }
-    }
-    override func mouseDragged(with event: NSEvent) { tiler.moveSeam() }
-    override func mouseUp(with event: NSEvent) { tiler.seamDrag = nil }
-
-    override func draw(_ dirtyRect: NSRect) {
-        // fully clear pixels let clicks fall through, so the gap is barely tinted
-        NSColor(white: 0.5, alpha: 0.02).setFill()
-        bounds.fill()
-        NSColor(white: 0.5, alpha: 0.35).setFill()
-        let row = target?.1.dir == .row
-        let grip = row
-            ? NSRect(x: bounds.midX - 1, y: bounds.midY - 20, width: 2, height: 40)
-            : NSRect(x: bounds.midX - 20, y: bounds.midY - 1, width: 40, height: 2)
-        NSBezierPath(roundedRect: grip, xRadius: 1, yRadius: 1).fill()
     }
 }
 

@@ -21,8 +21,8 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | Feature | Where |
 |---|---|
 | Auto-tile: new window splits the focused one along its longer side | `Tiler.tile` |
-| Resize by dragging the seam (gap) between windows | `SeamView` + `beginSeamDrag`/`moveSeam`/`shift` |
-| Resize by dragging a tiled window's edge (converted to a seam move on mouse up) | `resizeFromEdges` |
+| No gaps: tiles sit edge to edge (`gap = 0` in Tree.swift, user's choice) | `gap` |
+| Resize by dragging a tiled window's edge; neighbours follow live | `handle` → `resizeFromEdges` → `shift` |
 | Drag a window onto another (like Zen browser): edge = split there, middle = swap, blue preview | `mouseDragged`/`mouseUp`/`move` |
 | Float toggle `⌘⌥C` (centres it); dialogs + `floatingApps` always float | `toggleFloat`, `AXUIElement.isStandard` |
 | `⌘⌥ ←→↑↓` move/reorder, `⌃⌥⇧ ←→↑↓` focus, `⌘⇧↩` zoom to whole screen (tiled or floating), `⌃⌥ -/=` shrink/grow | `registerHotKeys` |
@@ -49,9 +49,12 @@ bindings must be turned off or `RegisterEventHotKey` fails (logged as "shortcut 
   - Visibility = `CGWindowListCopyWindowInfo(.optionOnScreenOnly)` minus native-fullscreen windows,
     which covers minimised, hidden apps and other Spaces.
   - Distinguishing user drags from our own `setFrame`: moved/resized notifications only count
-    while the left mouse button is down and no seam drag is active.
-  - Seam handles = small borderless `NSWindow`s in the gaps (pooled in `handles`). They paint
-    alpha 0.02 because fully clear pixels let clicks fall through.
+    while the left mouse button is down, and only for the first window touched in that drag
+    (the neighbours we resize live also send notifications).
+  - Resizing: the edge diff against the window's layout rect becomes a seam shift each
+    resized notification; the layout updates, so the next diff is incremental.
+  - History: there used to be drag handles (`SeamView`) in the gaps; removed when gaps went to 0
+    (see git log). Bring them back if gaps return and the user wants a grab area.
   - Coordinates: tree/AX use top-left origin of the main display; AppKit is bottom-left. Use `flip()`.
 
 ## Known limits / next ideas

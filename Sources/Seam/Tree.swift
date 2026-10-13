@@ -15,7 +15,8 @@ indirect enum Node: Equatable {
     case split(Dir, [Node], [Double])
 }
 
-let gap: CGFloat = 8
+/** Space between tiles and around them; 0 = edge to edge, by the user's choice. */
+let gap: CGFloat = 0
 let minPane: CGFloat = 200
 
 func leaves(_ node: Node) -> [Int] {
@@ -209,12 +210,12 @@ func treeSelfTest() {
     precondition(removeLeaf(.leaf(1), 1) == nil, "last window")
     precondition(path(to: 3, in: stacked) == [1, 1], "path")
 
-    let area = CGRect(x: 0, y: 0, width: 208, height: 100)
+    let area = CGRect(x: 0, y: 0, width: 200 + gap, height: 100)
     var out = Layout()
     layout(two, in: area, visible: { _ in true }, into: &out)
     precondition(out.panes[1] == CGRect(x: 0, y: 0, width: 100, height: 100), "left tile")
-    precondition(out.panes[2] == CGRect(x: 108, y: 0, width: 100, height: 100), "right tile after the gap")
-    precondition(out.seams.count == 1 && out.seams[0].rect.minX == 100, "seam in the gap")
+    precondition(out.panes[2] == CGRect(x: 100 + gap, y: 0, width: 100, height: 100), "right tile after the gap")
+    precondition(out.seams.count == 1 && out.seams[0].rect.minX == 100, "seam between them")
     out = Layout()
     layout(two, in: area, visible: { $0 == 2 }, into: &out)
     precondition(out.panes == [2: area] && out.seams.isEmpty, "hidden window takes no room")
