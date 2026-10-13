@@ -128,6 +128,39 @@ func updatingSizes(_ node: Node, at path: ArraySlice<Int>, _ change: (inout [Dou
     return .split(dir, children, sizes)
 }
 
+func node(at path: ArraySlice<Int>, in root: Node) -> Node? {
+    guard let first = path.first else { return root }
+    guard case let .split(_, children, _) = root else { return nil }
+    return node(at: path.dropFirst(), in: children[first])
+}
+
+func updating(_ root: Node, at path: ArraySlice<Int>, _ change: (Node) -> Node) -> Node {
+    guard let first = path.first else { return change(root) }
+    guard case .split(let dir, var children, let sizes) = root else { return root }
+    children[first] = updating(children[first], at: path.dropFirst(), change)
+    return .split(dir, children, sizes)
+}
+
+func isStacked(_ root: Node, _ id: Int) -> Bool {
+    guard var at = path(to: id, in: root), at.popLast() != nil, case .split(.column, _, _)? = node(at: at[...], in: root) else { return false }
+    return true
+}
+
+/** Takes `id` out of its stack and puts it beside that stack: undoes stacking. */
+func unstack(_ root: Node, _ id: Int) -> Node {
+    guard isStacked(root, id), var at = path(to: id, in: root), at.popLast() != nil,
+          let without = removeLeaf(root, id) else { return root }
+    // what's left of the stack is still at `at`; a row around it takes the window in beside it
+    let parent = at.dropLast()
+    if let i = at.last, case .split(.row, var children, var sizes)? = node(at: parent, in: without) {
+        sizes[i] /= 2
+        children.insert(.leaf(id), at: i + 1)
+        sizes.insert(sizes[i], at: i + 1)
+        return updating(without, at: parent) { _ in .split(.row, children, sizes) }
+    }
+    return updating(without, at: at[...]) { even(.row, [$0, .leaf(id)]) }
+}
+
 /** Turns the split at `path` from a row into a column or back, like i3's `layout toggle split`. */
 func flipSplit(_ node: Node, at path: ArraySlice<Int>) -> Node {
     guard case .split(let dir, var children, let sizes) = node else { return node }
@@ -255,6 +288,10 @@ func treeSelfTest() {
     precondition(removeLeaf(stacked, 3) == two, "closing collapses the split")
     precondition(removeLeaf(.leaf(1), 1) == nil, "last window")
     precondition(path(to: 3, in: stacked) == [1, 1], "path")
+    precondition(unstack(stacked, 3) == .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [0.5, 0.25, 0.25]), "unstack into the row")
+    let column: Node = .split(.column, [.leaf(1), .leaf(2)], [0.5, 0.5])
+    precondition(unstack(column, 2) == two, "unstack a stack at the root")
+    precondition(unstack(two, 2) == two, "not stacked: nothing to undo")
     let uneven: Node = .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [0.5, 0.3, 0.2])
     precondition(swapPlaces(uneven, 1, 3) == .split(.row, [.leaf(3), .leaf(2), .leaf(1)], [0.2, 0.3, 0.5]), "sizes travel with windows")
     precondition(swapPlaces(stacked, 1, 3) == swapLeaves(stacked, 1, 3), "different splits keep the slots")

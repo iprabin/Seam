@@ -27,7 +27,7 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | Float toggle `⌘⌥C` (centres it); dialogs + `floatingApps` always float | `toggleFloat`, `AXUIElement.isStandard` |
 | `⌘⌥ ←→↑↓` swap places with the window that way (each keeps its size when in the same row/stack, `swapPlaces`), `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow | `bindings` |
 | `⌘⌥T` flips the focused window's group row ⇄ column (i3 `layout toggle split`) | `flipFocused`, `flipSplit` |
-| `⌘⌥S` pulls the next window in reading order (previous if last) under the focused one | `stackNext` |
+| `⌘⌥S` toggles: pulls the next window in reading order (previous if last) under the focused one; on a stacked window, takes it out beside the stack | `stackNext`, `unstack` |
 | One tree per display; unplugged display's windows move to main | `trees`, `relayout` |
 | Menu bar item lists every shortcut (built from `bindings`, clicking runs it), Retile Everything, Quit | `bindings`, `addShortcuts` |
 

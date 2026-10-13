@@ -444,9 +444,17 @@ final class Tiler: NSObject {
         relayout()
     }
 
-    /** Pulls the next window in order (or the previous, at the end) in under the focused one. */
+    /**
+     * Pulls the next window in order (or the previous, at the end) in under the
+     * focused one; on a window already in a stack, takes it out beside the stack.
+     */
     func stackNext() {
         guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key] else { return }
+        if isStacked(tree, id) {
+            trees[key] = unstack(tree, id)
+            relayout()
+            return
+        }
         let order = leaves(tree).filter { layouts[key]?.panes[$0] != nil }
         guard let i = order.firstIndex(of: id), order.count > 1 else { return }
         let other = i + 1 < order.count ? order[i + 1] : order[i - 1]
@@ -481,7 +489,7 @@ final class Tiler: NSObject {
             + [nil]
             + arrows.map { name, key, zone in Binding(title: "Focus \(name)", key: key, modifiers: focus) { self.focus(zone) } }
             + [nil,
-               Binding(title: "Stack Next Window Under", key: kVK_ANSI_S, modifiers: move, action: stackNext),
+               Binding(title: "Stack Next Window Under / Unstack", key: kVK_ANSI_S, modifiers: move, action: stackNext),
                Binding(title: "Flip Side by Side ⇄ Stacked", key: kVK_ANSI_T, modifiers: move, action: flipFocused),
                Binding(title: "Float / Tile", key: kVK_ANSI_C, modifiers: move, action: toggleFloat),
                Binding(title: "Whole Screen", key: kVK_Return, modifiers: move, action: toggleZoom),
