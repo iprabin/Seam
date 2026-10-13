@@ -25,7 +25,7 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | Resize by dragging a tiled window's edge; neighbours follow live | `handle` → `resizeFromEdges` → `shift` |
 | Drag a window onto another (like Zen browser): edge = split there, middle = swap, blue preview | `mouseDragged`/`mouseUp`/`move` |
 | Float toggle `⌘⌥C` (centres it); dialogs + `floatingApps` always float | `toggleFloat`, `AXUIElement.isStandard` |
-| `⌘⌥ ←→↑↓` move/reorder, `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow | `bindings` |
+| `⌘⌥ ←→↑↓` swap places with the window that way (shape unchanged), `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow | `bindings` |
 | `⌘⌥T` flips the focused window's group row ⇄ column (i3 `layout toggle split`) | `flipFocused`, `flipSplit` |
 | `⌘⌥S` pulls the next window in reading order (previous if last) under the focused one | `stackNext` |
 | One tree per display; unplugged display's windows move to main | `trees`, `relayout` |

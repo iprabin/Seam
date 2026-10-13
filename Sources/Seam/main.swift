@@ -308,12 +308,14 @@ final class Tiler: NSObject {
 
     func move(_ id: Int, onto target: Int, _ zone: Zone) {
         guard let from = treeKey(of: id), let to = treeKey(of: target) else { return }
-        if from == to {
+        if zone == .center {
+            // each tree holds one of the two, so this swaps across displays too
+            trees = trees.mapValues { swapLeaves($0, id, target) }
+        } else if from == to {
             trees[to] = dropLeaf(trees[to]!, id, target, zone)
         } else {
-            // across displays there's nothing to swap with, so the middle means beside
             trees[from] = trees[from].flatMap { removeLeaf($0, id) }
-            trees[to] = insertBeside(trees[to]!, target, id, zone == .center ? .right : zone)
+            trees[to] = insertBeside(trees[to]!, target, id, zone)
         }
     }
 
@@ -395,9 +397,10 @@ final class Tiler: NSObject {
         return layouts.values.lazy.compactMap { paneAt($0.panes, point, except: id) }.first
     }
 
+    /** Trades places with the window that way; the layout's shape stays as it is. */
     func moveFocused(_ zone: Zone) {
         guard let id = focusedID(), let target = neighbour(id, zone) else { return }
-        move(id, onto: target, zone)
+        move(id, onto: target, .center)
         relayout()
     }
 
@@ -474,7 +477,7 @@ final class Tiler: NSObject {
         // ⌘⌥ anchors every shortcut, by the user's choice; ⇧ is the only extra
         let move = UInt32(cmdKey | optionKey), focus = move | UInt32(shiftKey)
         let arrows: [(String, Int, Zone)] = [("Left", kVK_LeftArrow, .left), ("Right", kVK_RightArrow, .right), ("Up", kVK_UpArrow, .top), ("Down", kVK_DownArrow, .bottom)]
-        return arrows.map { name, key, zone in Binding(title: "Move \(name)", key: key, modifiers: move) { self.moveFocused(zone) } }
+        return arrows.map { name, key, zone in Binding(title: "Swap \(name)", key: key, modifiers: move) { self.moveFocused(zone) } }
             + [nil]
             + arrows.map { name, key, zone in Binding(title: "Focus \(name)", key: key, modifiers: focus) { self.focus(zone) } }
             + [nil,
