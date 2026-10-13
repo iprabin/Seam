@@ -147,9 +147,12 @@ struct Layout {
 /**
  * Every visible window's rect and every seam. A hidden window (minimised, on
  * another Space, app hidden) keeps its place in the tree but takes no room,
- * so it comes back where it was.
+ * so it comes back where it was. `minSize` is each window's smallest size its
+ * app allows: a child below its minimum gets exactly that, and the rest share
+ * what's left by their shares. If the minimums don't fit, windows overlap.
  */
-func layout(_ node: Node, in rect: CGRect, visible: (Int) -> Bool, path: [Int] = [], into out: inout Layout) {
+func layout(_ node: Node, in rect: CGRect, visible: (Int) -> Bool, minSize: (Int) -> CGSize = { _ in .zero },
+            path: [Int] = [], into out: inout Layout) {
     switch node {
     case .leaf(let id):
         if visible(id) { out.panes[id] = rect }
@@ -160,15 +163,28 @@ func layout(_ node: Node, in rect: CGRect, visible: (Int) -> Bool, path: [Int] =
         let total = shown.reduce(0) { $0 + sizes[$1] }
         let length = (row ? rect.width : rect.height) - gap * CGFloat(shown.count - 1)
         let pxPerShare = length / CGFloat(total)
+        // pin children to their minimums until the rest, shared out, all clear theirs
+        let mins = shown.map { minLength(children[$0], dir, visible, minSize) }
+        var pinned = Set<Int>()
+        var px = shown.map { pxPerShare * CGFloat(sizes[$0]) }
+        for _ in shown {
+            let free = length - pinned.reduce(0) { $0 + mins[$1] }
+            let freeShares = shown.indices.filter { !pinned.contains($0) }.reduce(0) { $0 + sizes[shown[$1]] }
+            for k in shown.indices where !pinned.contains(k) { px[k] = free * CGFloat(sizes[shown[k]] / freeShares) }
+            let under = shown.indices.filter { !pinned.contains($0) && px[$0] < mins[$0] }
+            if under.isEmpty { break }
+            for k in under { pinned.insert(k); px[k] = mins[k] }
+            if pinned.count == shown.count { break }
+        }
         let end = row ? rect.maxX : rect.maxY
         var offset = row ? rect.minX : rect.minY
         for (n, i) in shown.enumerated() {
             let last = n == shown.count - 1
-            let size = last ? end - offset : (pxPerShare * CGFloat(sizes[i])).rounded()
+            let size = last ? end - offset : px[n].rounded()
             let child = row
                 ? CGRect(x: offset, y: rect.minY, width: size, height: rect.height)
                 : CGRect(x: rect.minX, y: offset, width: rect.width, height: size)
-            layout(children[i], in: child, visible: visible, path: path + [i], into: &out)
+            layout(children[i], in: child, visible: visible, minSize: minSize, path: path + [i], into: &out)
             offset += size
             if !last {
                 let seam = row
@@ -178,6 +194,20 @@ func layout(_ node: Node, in rect: CGRect, visible: (Int) -> Bool, path: [Int] =
                 offset += gap
             }
         }
+    }
+}
+
+/** The least room `node` needs along `dir`: side by side adds up, stacked takes the largest. */
+func minLength(_ node: Node, _ dir: Dir, _ visible: (Int) -> Bool, _ minSize: (Int) -> CGSize) -> CGFloat {
+    switch node {
+    case .leaf(let id):
+        guard visible(id) else { return 0 }
+        let size = minSize(id)
+        return dir == .row ? size.width : size.height
+    case let .split(d, children, _):
+        let shown = children.filter { leaves($0).contains(where: visible) }
+        let each = shown.map { minLength($0, dir, visible, minSize) }
+        return d == dir ? each.reduce(0, +) + gap * CGFloat(max(shown.count - 1, 0)) : each.max() ?? 0
     }
 }
 
@@ -229,6 +259,14 @@ func treeSelfTest() {
     out = Layout()
     layout(two, in: area, visible: { $0 == 2 }, into: &out)
     precondition(out.panes == [2: area] && out.seams.isEmpty, "hidden window takes no room")
+    // 4 across 400 wide, the second can't go under 160: it gets 160, the other three share 240
+    let four: Node = .split(.row, (1...4).map { .leaf($0) }, [0.25, 0.25, 0.25, 0.25])
+    out = Layout()
+    layout(four, in: CGRect(x: 0, y: 0, width: 400 + 3 * gap, height: 100), visible: { _ in true },
+           minSize: { $0 == 2 ? CGSize(width: 160, height: 0) : .zero }, into: &out)
+    precondition(out.panes[2]!.width == 160 && out.panes[1]!.width == 80 && out.panes[4]!.width == 80, "minimum width honoured")
+    precondition(minLength(stacked, .row, { _ in true }, { _ in CGSize(width: 50, height: 70) }) == 100 + gap, "row adds up")
+    precondition(minLength(stacked, .column, { _ in true }, { _ in CGSize(width: 50, height: 70) }) == 140 + gap, "stack adds up inside")
 
     precondition(zoneAt(area, CGPoint(x: 104, y: 50)) == .center && zoneAt(area, CGPoint(x: 5, y: 50)) == .left, "zones")
     print("selftest ok")

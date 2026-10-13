@@ -62,6 +62,8 @@ bindings must be turned off or `RegisterEventHotKey` fails (logged as "shortcut 
 
 - Windows on other Spaces aren't listed by AX → forgotten and re-tiled on return (marked `ponytail:`).
 - No animation; frames snap.
-- Apps with large minimum sizes overflow their tile.
+- Apps with a minimum size: `relayout` notices a window that came out bigger than its tile,
+  records it in `minSizes`, and lays out again; `layout()` pins such children to their minimum
+  and shares the rest. If the minimums add up to more than the screen, windows still overlap.
 - No persistence across restarts.
 - Not tested yet on real windows by the user at time of writing (2026-10-13): first feedback pending.

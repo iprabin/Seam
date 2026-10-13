@@ -85,6 +85,8 @@ final class Tiler: NSObject {
     var zoomed: Int?
     /** Floating windows filling the screen, and the frame each had before. */
     var floatZoomed: [Int: CGRect] = [:]
+    /** The smallest size each window's app has allowed it, learned by trying. */
+    var minSizes: [Int: CGSize] = [:]
     /** A tiled window the user is moving or resizing with the mouse. */
     var dragging: Int?
     var resizing: Int?
@@ -204,6 +206,7 @@ final class Tiler: NSObject {
         untile(id)
         windows[id] = nil
         floatZoomed[id] = nil
+        minSizes[id] = nil
     }
 
     func onScreenIDs() -> Set<Int> {
@@ -223,21 +226,40 @@ final class Tiler: NSObject {
         let onScreen = onScreenIDs()
         let visible = { (id: Int) in onScreen.contains(id) && self.windows[id]?.isFullScreen != true }
         layouts = [:]
+        var placed: [Int] = []
         for screen in screens {
             let key = key(screen)
             guard let tree = trees[key] else { continue }
             let area = tileArea(screen)
             var out = Layout()
-            layout(tree, in: area, visible: visible, into: &out)
+            layout(tree, in: area, visible: visible, minSize: { self.minSizes[$0] ?? .zero }, into: &out)
             layouts[key] = out
-            for (id, rect) in out.panes { place(id, id == zoomed ? area : rect) }
+            for (id, rect) in out.panes where place(id, id == zoomed ? area : rect) && id != zoomed { placed.append(id) }
         }
+        // An app with a minimum size comes out bigger than its tile; remember that
+        // minimum and lay out again so its neighbours make room. Minimums only grow,
+        // so this settles.
+        var learned = false
+        for id in placed {
+            guard let frame = windows[id]?.frame, let tile = applied[id] else { continue }
+            let known = minSizes[id] ?? .zero
+            let size = CGSize(width: frame.width > tile.width + 2 ? frame.width : known.width,
+                              height: frame.height > tile.height + 2 ? frame.height : known.height)
+            if size.width > known.width + 2 || size.height > known.height + 2 {
+                minSizes[id] = size
+                learned = true
+            }
+        }
+        if learned { relayout() }
     }
 
-    func place(_ id: Int, _ rect: CGRect) {
-        guard id != dragging, id != resizing, applied[id] != rect else { return }
+    /** Whether it moved the window. */
+    @discardableResult
+    func place(_ id: Int, _ rect: CGRect) -> Bool {
+        guard id != dragging, id != resizing, applied[id] != rect else { return false }
         windows[id]?.setFrame(rect)
         applied[id] = rect
+        return true
     }
 
     // MARK: mouse
@@ -284,22 +306,30 @@ final class Tiler: NSObject {
 
     /** Dragging a tile's edge moves the seam on that side, as dragging the seam would. */
     func resizeFromEdges(_ id: Int) {
-        guard let key = treeKey(of: id), let old = layouts[key]?.panes[id], let seams = layouts[key]?.seams, let new = windows[id]?.frame else { return }
+        guard let key = treeKey(of: id), let old = layouts[key]?.panes[id], let new = windows[id]?.frame else { return }
         let edges: [(Dir, CGFloat, CGFloat)] = [
             (.row, old.minX, new.minX), (.row, old.maxX, new.maxX),
             (.column, old.minY, new.minY), (.column, old.maxY, new.maxY),
         ]
         for (dir, was, now) in edges where abs(now - was) > 2 {
-            let seam = seams.first { s in
-                let row = dir == .row
-                let (near, far) = row ? (s.rect.minX, s.rect.maxX) : (s.rect.minY, s.rect.maxY)
-                let across = row ? old.midY : old.midX
-                let span = row ? s.rect.minY...s.rect.maxY : s.rect.minX...s.rect.maxX
-                return s.dir == dir && (abs(near - was) < 2 || abs(far - was) < 2) && span.contains(across)
-            }
-            guard let seam, let shares = trees[key].flatMap({ sizes(at: seam.path[...], in: $0) }) else { continue }
-            shift(key, seam, before: shares[seam.a], after: shares[seam.b], by: now - was)
+            if let seam = seam(key, beside: old, dir, at: was) { moveSeam(key, seam, by: now - was) }
         }
+    }
+
+    /** The seam running along `tile`'s edge at `edge`. */
+    func seam(_ key: CGDirectDisplayID, beside tile: CGRect, _ dir: Dir, at edge: CGFloat) -> SeamInfo? {
+        layouts[key]?.seams.first { s in
+            let row = dir == .row
+            let (near, far) = row ? (s.rect.minX, s.rect.maxX) : (s.rect.minY, s.rect.maxY)
+            let across = row ? tile.midY : tile.midX
+            let span = row ? s.rect.minY...s.rect.maxY : s.rect.minX...s.rect.maxX
+            return s.dir == dir && (abs(near - edge) < 2 || abs(far - edge) < 2) && span.contains(across)
+        }
+    }
+
+    func moveSeam(_ key: CGDirectDisplayID, _ seam: SeamInfo, by px: CGFloat) {
+        guard let shares = trees[key].flatMap({ sizes(at: seam.path[...], in: $0) }) else { return }
+        shift(key, seam, before: shares[seam.a], after: shares[seam.b], by: px)
     }
 
     /** Trades `px` of room between the seam's two sides; both stop at their minimums. */
