@@ -127,7 +127,19 @@ final class Tiler: NSObject {
             // (switching window) can land mid-relayout, or on an app snapping its
             // size (Terminal's character grid): that's not a resize.
             guard NSEvent.pressedMouseButtons & 1 != 0, mouseMoved, let id = element.windowID, id != zoomed, treeKey(of: id) != nil,
-                  (resizing ?? dragging ?? id) == id else { return }
+                  (resizing ?? dragging ?? id) == id else {
+                guard NSEvent.pressedMouseButtons & 1 == 0 else { return }
+                // an app moving its own tile (Zoom grows to the whole screen after login) goes back;
+                // only a moved origin counts: an app minimum keeps it and only grows the size
+                // ponytail: an app that always moves itself back would ping-pong; cap retries if one does
+                if let id = element.windowID, id != zoomed, let tile = applied[id], let frame = element.frame,
+                   abs(frame.minX - tile.minX) > 2 || abs(frame.minY - tile.minY) > 2 {
+                    applied[id] = nil
+                    return relayout()
+                }
+                showFocus()
+                return
+            }
             if note == kAXWindowResizedNotification {
                 resizing = id
                 dragging = nil
