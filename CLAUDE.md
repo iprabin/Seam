@@ -30,7 +30,7 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | `⌘⌥T` flips the focused window's group row ⇄ column (i3 `layout toggle split`) | `flipFocused`, `flipSplit` |
 | `⌘⌥S` toggles: pulls the next window in reading order (previous if last) under the focused one; on a stacked window, takes it out beside the stack and evens out that row's widths | `stackNext`, `unstack` |
 | `⌘⌥0` evens out every split on the focused window's display (i3 `balance`) and un-squeezes them | `balance`, `balanced` |
-| Rainbow outline, colours running round it (static conic gradient; used to spin, stilled for WindowServer GPU;  2px, rounded 16 like windows; user wanted it fun) round the focused tile, since zero gaps hide it; none when zoomed or floating | `showFocus`, `border` |
+| Rainbow outline, colours running round it (static conic gradient; used to spin, stilled for WindowServer GPU;  2px, rounded 16 like windows; user wanted it fun) round the focused window (its real frame, clipped to its screen, so an app minimum spilling past the tile is outlined whole), since zero gaps hide it; none when zoomed or floating | `showFocus`, `border` |
 | One tree per desktop (Space) per display (`TreeKey`), so each desktop keeps its own layout; a window moved to another desktop joins its tree; unplugged display's / deleted desktop's windows move to main | `trees`, `relayout`, `sync` |
 | Menu bar item lists every shortcut (built from `bindings`, clicking runs it), Retile Everything, Quit | `bindings`, `addShortcuts` |
 

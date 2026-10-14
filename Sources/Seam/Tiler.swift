@@ -223,7 +223,10 @@ final class Tiler: NSObject {
         guard let id = focusedID(), id != zoomed, let rect = layouts.values.lazy.compactMap({ $0.panes[id] }).first else {
             return border.orderOut(nil)
         }
-        border.setFrame(flip(rect), display: true)
+        // an app with a bigger minimum spills past its tile: outline the window itself, kept on its screen
+        let area = tileArea(screen(containing: CGPoint(x: rect.midX, y: rect.midY)))
+        let frame = windows[id]?.frame.map { $0.intersection(area) }.flatMap { $0.isEmpty ? nil : $0 } ?? rect
+        border.setFrame(flip(frame), display: true)
         border.orderFrontRegardless()
     }
 
@@ -245,7 +248,8 @@ final class Tiler: NSObject {
             }
         }
         unsettled = []
-        if learned { relayout() }
+        // the window may have settled bigger than its tile since the outline was drawn
+        if learned { relayout() } else { showFocus() }
     }
 
     /** Whether it moved the window. */
