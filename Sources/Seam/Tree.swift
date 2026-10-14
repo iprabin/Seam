@@ -6,11 +6,11 @@ import Foundation
  * with a share each (summing to 1) and a seam between neighbours. Rects are
  * in Accessibility coordinates: top-left origin on the main display.
  */
-enum Dir: Codable { case row, column }
+enum Dir { case row, column }
 /** Where a dragged window lands on another: beside it, or in its place. */
 enum Zone { case left, right, top, bottom, center }
 
-indirect enum Node: Equatable, Codable {
+indirect enum Node: Equatable {
     case leaf(Int)
     case split(Dir, [Node], [Double])
 }
@@ -308,7 +308,6 @@ func treeSelfTest() {
     precondition(swapPlaces(stacked, 1, 3) == swapLeaves(stacked, 1, 3), "different splits keep the slots")
     precondition(flipSplit(stacked, at: [1]) == .split(.row, [.leaf(1), .split(.row, [.leaf(2), .leaf(3)], [0.5, 0.5])], [0.5, 0.5]), "flip inner split")
     precondition(flipSplit(two, at: []) == .split(.column, [.leaf(1), .leaf(2)], [0.5, 0.5]), "flip root")
-    precondition(try! JSONDecoder().decode(Node.self, from: JSONEncoder().encode(nested)) == nested, "saved and loaded")
 
     let area = CGRect(x: 0, y: 0, width: 200 + gap, height: 100)
     var out = Layout()

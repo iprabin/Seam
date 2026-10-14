@@ -64,7 +64,7 @@ func tileArea(_ screen: NSScreen) -> CGRect { flip(screen.visibleFrame).insetBy(
 @_silgen_name("CGSCopySpacesForWindows") func CGSCopySpacesForWindows(_ cid: Int32, _ mask: Int32, _ windows: CFArray) -> Unmanaged<CFArray>?
 
 /** A tree per Space per display: each desktop keeps its own layout. */
-struct TreeKey: Hashable, Codable {
+struct TreeKey: Hashable {
     var space: UInt64
     var display: CGDirectDisplayID
 }

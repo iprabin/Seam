@@ -12,8 +12,6 @@ final class Tiler: NSObject {
     var windows: [Int: AXUIElement] = [:]
     /** The frame each tile was last given, so unchanged ones aren't touched. */
     var applied: [Int: CGRect] = [:]
-    /** The trees as last written to UserDefaults. */
-    var saved: [TreeKey: Node] = [:]
     var observers: [pid_t: AXObserver] = [:]
     var lastFocus: Int?
     var zoomed: Int?
@@ -56,8 +54,6 @@ final class Tiler: NSObject {
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDragged) { _ in self.mouseDragged() }
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { _ in self.mouseUp() }
         registerHotKeys()
-        // the layout from the last run; windows closed since are dropped by sync
-        if let saved = UserDefaults.standard.data(forKey: "spaceTrees") { trees = (try? JSONDecoder().decode([TreeKey: Node].self, from: saved)) ?? [:] }
         sync()
     }
 
@@ -212,11 +208,6 @@ final class Tiler: NSObject {
             layout(tree, in: area, visible: visible, minSize: minSize, into: &out)
             layouts[key] = out
             for (id, rect) in out.panes where place(id, id == zoomed ? area : rect) && id != zoomed { placed.append(id) }
-        }
-        // window IDs outlive Seam, so a restart can put everything back
-        if trees != saved {
-            UserDefaults.standard.set(try? JSONEncoder().encode(trees), forKey: "spaceTrees")
-            saved = trees
         }
         unsettled.formUnion(placed)
         settle?.cancel()

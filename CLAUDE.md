@@ -69,7 +69,7 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
 
 ## Known limits / next ideas
 
-- Windows on other Spaces aren't listed by AX; `sync` keeps them while the window server (`CGWindowList .optionAll`) still has them. Space IDs come from private CGS calls in `AX.swift` (`spaces()`, `spaces(of:)`), the same ones yabai uses; trees persist under the `spaceTrees` default.
+- Windows on other Spaces aren't listed by AX; `sync` keeps them while the window server (`CGWindowList .optionAll`) still has them. Space IDs come from private CGS calls in `AX.swift` (`spaces()`, `spaces(of:)`), the same ones yabai uses.
 - No animation; frames snap.
 - Apps with a minimum size: 0.3s after a relayout, `learnMinSizes` notices a window that came out
   bigger than its tile (read later because some apps resize late; reading at once learned bogus
@@ -78,6 +78,5 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
   real); Retile Everything clears them all. `⌘⌥=` marks the row's other windows `squeezed`:
   their app minimums are ignored (floor `minPane` only), so they run on under the focused window;
   `⌘⌥-` un-squeezes them. Otherwise, if the minimums add up to more than the screen, windows still overlap.
-- The trees persist in UserDefaults (`trees`, saved each `relayout`) by `CGWindowID`, which lives as long as
-  the window, so restarting Seam keeps the layout; after a reboot/app relaunch IDs are new and windows re-tile.
+- Layout isn't persisted (user removed it): restarting Seam re-tiles every window from scratch.
 - Not tested yet on real windows by the user at time of writing (2026-10-13): first feedback pending.
