@@ -116,7 +116,8 @@ extension Tiler {
 
 /**
  * A rounded rainbow line just inside its bounds, its colours running round it:
- * a colour wheel spins behind the line, which masks all but the line.
+ * a colour wheel behind the line, which masks all but the line. It used to spin;
+ * stilled because WindowServer redrew it every frame, all the time.
  */
 final class Outline: NSView {
     let ring = CALayer(), wheel = CAGradientLayer(), line = CAShapeLayer()
@@ -129,13 +130,6 @@ final class Outline: NSView {
         wheel.type = .conic
         wheel.startPoint = CGPoint(x: 0.5, y: 0.5)
         wheel.endPoint = CGPoint(x: 0.5, y: 0)
-        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
-        spin.fromValue = 0
-        spin.toValue = -2 * Double.pi
-        spin.duration = 4
-        spin.repeatCount = .infinity
-        spin.isRemovedOnCompletion = false
-        wheel.add(spin, forKey: "spin")
         line.lineWidth = 2
         line.fillColor = nil
         line.strokeColor = NSColor.black.cgColor
@@ -152,7 +146,7 @@ final class Outline: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         ring.frame = bounds
-        // a square wide enough to cover the corners whichever way it's turned
+        // a square wide enough to cover the corners
         let side = hypot(bounds.width, bounds.height)
         wheel.bounds = CGRect(x: 0, y: 0, width: side, height: side)
         wheel.position = CGPoint(x: bounds.midX, y: bounds.midY)
