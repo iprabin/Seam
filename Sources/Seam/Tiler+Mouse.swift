@@ -60,7 +60,7 @@ extension Tiler {
     }
 
     /** The seam running along `tile`'s edge at `edge`. */
-    func seam(_ key: CGDirectDisplayID, beside tile: CGRect, _ dir: Dir, at edge: CGFloat) -> SeamInfo? {
+    func seam(_ key: TreeKey, beside tile: CGRect, _ dir: Dir, at edge: CGFloat) -> SeamInfo? {
         layouts[key]?.seams.first { s in
             let row = dir == .row
             let (near, far) = row ? (s.rect.minX, s.rect.maxX) : (s.rect.minY, s.rect.maxY)
@@ -70,13 +70,13 @@ extension Tiler {
         }
     }
 
-    func moveSeam(_ key: CGDirectDisplayID, _ seam: SeamInfo, by px: CGFloat) {
+    func moveSeam(_ key: TreeKey, _ seam: SeamInfo, by px: CGFloat) {
         guard let shares = trees[key].flatMap({ sizes(at: seam.path[...], in: $0) }) else { return }
         shift(key, seam, before: shares[seam.a], after: shares[seam.b], by: px)
     }
 
     /** Trades `px` of room between the seam's two sides; both stop at their minimums. */
-    func shift(_ screen: CGDirectDisplayID, _ seam: SeamInfo, before: Double, after: Double, by px: CGFloat) {
+    func shift(_ screen: TreeKey, _ seam: SeamInfo, before: Double, after: Double, by px: CGFloat) {
         let pair = before + after
         let least = Double(minPane / seam.pxPerShare)
         let size = min(max(before + Double(px / seam.pxPerShare), least), pair - least)

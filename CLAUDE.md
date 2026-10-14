@@ -25,13 +25,13 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | No gaps: tiles sit edge to edge (`gap = 0` in Tree.swift, user's choice) | `gap` |
 | Resize by dragging a tiled window's edge; neighbours follow live | `handle` → `resizeFromEdges` → `shift` |
 | Drag a window onto another (like Zen browser): edge = split there, middle = swap, blue preview | `mouseDragged`/`mouseUp`/`move` |
-| Float toggle `⌘⌥C` (centres it); dialogs + `floatingApps` always float | `toggleFloat`, `AXUIElement.isStandard` |
+| Float toggle `⌘⌥C` (centres it); dialogs, windows opening under `minPane` either way (Finder's Empty Trash popup) + `floatingApps` always float | `toggleFloat`, `AXUIElement.isStandard` |
 | `⌘⌥ ←→↑↓` swap places with the window that way (each keeps its size when in the same row/stack, `swapPlaces`), `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow width by 10% of its row, down to its min / up to the others at theirs (`grow`; height in a stack only if no row) | `bindings` |
 | `⌘⌥T` flips the focused window's group row ⇄ column (i3 `layout toggle split`) | `flipFocused`, `flipSplit` |
 | `⌘⌥S` toggles: pulls the next window in reading order (previous if last) under the focused one; on a stacked window, takes it out beside the stack and evens out that row's widths | `stackNext`, `unstack` |
 | `⌘⌥0` evens out every split on the focused window's display (i3 `balance`) and un-squeezes them | `balance`, `balanced` |
 | Rainbow outline, colours circling it (spinning conic gradient, 4s a turn;  2px, rounded 16 like windows; user wanted it fun) round the focused tile, since zero gaps hide it; none when zoomed or floating | `showFocus`, `border` |
-| One tree per display; unplugged display's windows move to main | `trees`, `relayout` |
+| One tree per desktop (Space) per display (`TreeKey`), so each desktop keeps its own layout; a window moved to another desktop joins its tree; unplugged display's / deleted desktop's windows move to main | `trees`, `relayout`, `sync` |
 | Menu bar item lists every shortcut (built from `bindings`, clicking runs it), Retile Everything, Quit | `bindings`, `addShortcuts` |
 
 **Every shortcut is ⌘⌥ + key** (user's rule; ⇧ is the only extra modifier allowed). They are
@@ -52,10 +52,10 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
   - `Tiler+Keys.swift`: `Binding`, keyboard actions, hotkey + menu registration.
   - `main.swift`: `--selftest`, menu bar item, Accessibility prompt, run loop.
   - Window identity = `CGWindowID` via private `_AXUIElementGetWindow`.
-  - `sync()` rescans all regular apps' AX windows (add new, forget gone), then `relayout()`.
+  - `sync()` rescans every app's AX windows (regular + accessory, so menu bar apps' windows tile) (add new, forget gone), then `relayout()`.
     Called on almost any AX notification; cheap enough, simple and self-healing.
   - `relayout()` computes `layouts` per display and sets frames; `applied` skips windows already
-    at their rect (avoids fighting apps and needless AX calls).
+    at their rect (avoids fighting apps and needless AX calls); cleared on a Space switch since windows there may have been reset meanwhile.
   - Visibility = `CGWindowListCopyWindowInfo(.optionOnScreenOnly)` minus native-fullscreen windows,
     which covers minimised, hidden apps and other Spaces.
   - Distinguishing user drags from our own `setFrame`: moved/resized notifications only count
@@ -69,7 +69,7 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
 
 ## Known limits / next ideas
 
-- Windows on other Spaces aren't listed by AX; `sync` keeps them while the window server (`CGWindowList .optionAll`) still has them, so they hold their place (one tree per display spans all its Spaces; each Space shows its own windows from it).
+- Windows on other Spaces aren't listed by AX; `sync` keeps them while the window server (`CGWindowList .optionAll`) still has them. Space IDs come from private CGS calls in `AX.swift` (`spaces()`, `spaces(of:)`), the same ones yabai uses; trees persist under the `spaceTrees` default.
 - No animation; frames snap.
 - Apps with a minimum size: 0.3s after a relayout, `learnMinSizes` notices a window that came out
   bigger than its tile (read later because some apps resize late; reading at once learned bogus

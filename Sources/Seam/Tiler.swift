@@ -6,14 +6,14 @@ let floatingApps: Set<String> = ["com.apple.systempreferences", "com.apple.calcu
 let axCallback: AXObserverCallback = { _, element, note, _ in tiler.handle(note as String, element) }
 
 final class Tiler: NSObject {
-    /** One tree per display. */
-    var trees: [CGDirectDisplayID: Node] = [:]
-    var layouts: [CGDirectDisplayID: Layout] = [:]
+    /** One tree per Space per display. */
+    var trees: [TreeKey: Node] = [:]
+    var layouts: [TreeKey: Layout] = [:]
     var windows: [Int: AXUIElement] = [:]
     /** The frame each tile was last given, so unchanged ones aren't touched. */
     var applied: [Int: CGRect] = [:]
     /** The trees as last written to UserDefaults. */
-    var saved: [CGDirectDisplayID: Node] = [:]
+    var saved: [TreeKey: Node] = [:]
     var observers: [pid_t: AXObserver] = [:]
     var lastFocus: Int?
     var zoomed: Int?
@@ -45,6 +45,8 @@ final class Tiler: NSObject {
             // the switch is done: bring the outline over, the slow AX rescan can wait a frame
             self.border.orderOut(nil)
             self.border.alphaValue = 0
+            // windows on the other Space may have been put back to their own size meanwhile
+            self.applied = [:]
             self.relayout()
             NSAnimationContext.runAnimationGroup { $0.duration = 0.25; self.border.animator().alphaValue = 1 }
             DispatchQueue.main.async { self.sync() }
@@ -55,7 +57,7 @@ final class Tiler: NSObject {
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { _ in self.mouseUp() }
         registerHotKeys()
         // the layout from the last run; windows closed since are dropped by sync
-        if let saved = UserDefaults.standard.data(forKey: "trees") { trees = (try? JSONDecoder().decode([CGDirectDisplayID: Node].self, from: saved)) ?? [:] }
+        if let saved = UserDefaults.standard.data(forKey: "spaceTrees") { trees = (try? JSONDecoder().decode([TreeKey: Node].self, from: saved)) ?? [:] }
         sync()
     }
 
@@ -64,7 +66,8 @@ final class Tiler: NSObject {
     /** Picks up new windows, forgets closed ones, and lays everything out. */
     func sync() {
         var seen = Set<Int>()
-        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+        // accessory apps (menu bar apps like Wallpaper) open real windows too; isStandard filters their panels
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy != .prohibited && $0.processIdentifier != getpid() }
         for app in apps {
             let pid = app.processIdentifier
             if observers[pid] == nil { observe(pid) }
@@ -75,7 +78,9 @@ final class Tiler: NSObject {
                 if windows[id] != nil { continue }
                 windows[id] = window
                 watch(window, pid)
-                if treeKey(of: id) == nil, window.isStandard && !floatingApps.contains(app.bundleIdentifier ?? "") { tile(id, near: lastFocus) }
+                // smaller than a tile's minimum either way, it's a popup (Finder's Empty Trash), not a workspace
+                if treeKey(of: id) == nil, window.isStandard, let frame = window.frame, frame.width >= minPane, frame.height >= minPane,
+                   !floatingApps.contains(app.bundleIdentifier ?? "") { tile(id, near: lastFocus) }
             }
         }
         let live = Set(apps.map(\.processIdentifier))
@@ -87,6 +92,16 @@ final class Tiler: NSObject {
         // window server is on another Space, so it keeps its place (zero room here)
         let existing = windowIDs([.optionAll])
         for id in Set(windows.keys).union(trees.values.flatMap(leaves)) where !seen.contains(id) && !existing.contains(id) { forget(id) }
+        // a window sent to another desktop (Mission Control) joins that desktop's tree
+        for (key, tree) in trees {
+            for id in leaves(tree) {
+                let on = spaces(of: id)
+                guard on.count == 1, on[0] != key.space else { continue }
+                untile(id)
+                let to = TreeKey(space: on[0], display: key.display)
+                trees[to] = trees[to].map { appendLeaf($0, id) } ?? .leaf(id)
+            }
+        }
         relayout()
     }
 
@@ -139,7 +154,7 @@ final class Tiler: NSObject {
         }
     }
 
-    func treeKey(of id: Int) -> CGDirectDisplayID? {
+    func treeKey(of id: Int) -> TreeKey? {
         trees.first { leaves($0.value).contains(id) }?.key
     }
 
@@ -148,8 +163,9 @@ final class Tiler: NSObject {
         if let target, target != id, let key = treeKey(of: target), let rect = layouts[key]?.panes[target] {
             trees[key] = insertBeside(trees[key]!, target, id, rect.width >= rect.height ? .right : .bottom)
         } else if let frame = windows[id]?.frame {
-            let key = key(screen(containing: CGPoint(x: frame.midX, y: frame.midY)))
-            trees[key] = trees[key].map { appendLeaf($0, id) } ?? .leaf(id)
+            var to = shownKey(screen(containing: CGPoint(x: frame.midX, y: frame.midY)), spaces().current)
+            if let on = spaces(of: id).first { to.space = on }
+            trees[to] = trees[to].map { appendLeaf($0, id) } ?? .leaf(id)
         }
     }
 
@@ -174,11 +190,12 @@ final class Tiler: NSObject {
 
     func relayout() {
         let screens = NSScreen.screens
-        let keys = Set(screens.map(key))
-        // a disconnected display's windows move to the main one
-        for (gone, tree) in trees where !keys.contains(gone) {
+        let displays = Set(screens.map(key)), (current, all) = spaces()
+        // a disconnected display's or deleted desktop's windows move to the main one; sync
+        // then sends each to the desktop it's really on
+        let main = shownKey(screens[0], current)
+        for (gone, tree) in trees where !displays.contains(gone.display) || !all.contains(gone.space) {
             trees[gone] = nil
-            let main = key(screens[0])
             for id in leaves(tree) { trees[main] = trees[main].map { appendLeaf($0, id) } ?? .leaf(id) }
         }
         let onScreen = windowIDs([.optionOnScreenOnly, .excludeDesktopElements])
@@ -188,7 +205,7 @@ final class Tiler: NSObject {
         layouts = [:]
         var placed: [Int] = []
         for screen in screens {
-            let key = key(screen)
+            let key = shownKey(screen, current)
             guard let tree = trees[key] else { continue }
             let area = tileArea(screen)
             var out = Layout()
@@ -198,7 +215,7 @@ final class Tiler: NSObject {
         }
         // window IDs outlive Seam, so a restart can put everything back
         if trees != saved {
-            UserDefaults.standard.set(try? JSONEncoder().encode(trees), forKey: "trees")
+            UserDefaults.standard.set(try? JSONEncoder().encode(trees), forKey: "spaceTrees")
             saved = trees
         }
         unsettled.formUnion(placed)
