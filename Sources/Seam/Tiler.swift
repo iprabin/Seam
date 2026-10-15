@@ -132,10 +132,13 @@ final class Tiler: NSObject {
                 // an app moving its own tile (Zoom grows to the whole screen after login) goes back;
                 // only a moved origin counts: an app minimum keeps it and only grows the size
                 // ponytail: an app that always moves itself back would ping-pong; cap retries if one does
-                if let id = element.windowID, id != zoomed, let tile = applied[id], let frame = element.frame,
-                   abs(frame.minX - tile.minX) > 2 || abs(frame.minY - tile.minY) > 2 {
-                    applied[id] = nil
-                    return relayout()
+                if let id = element.windowID, id != zoomed, let tile = applied[id], let frame = element.frame {
+                    // smaller than its tile is the app's own choice (VLC keeps its video's aspect): centre it, don't fight
+                    if frame.width < tile.width - 2 || frame.height < tile.height - 2 { centre(element, frame, in: tile) }
+                    else if abs(frame.minX - tile.minX) > 2 || abs(frame.minY - tile.minY) > 2 {
+                        applied[id] = nil
+                        return relayout()
+                    }
                 }
                 showFocus()
                 return
@@ -252,16 +255,29 @@ final class Tiler: NSObject {
         for id in unsettled where id != dragging && id != resizing && !squeezed.contains(id) {
             guard let frame = windows[id]?.frame, let tile = applied[id] else { continue }
             let known = minSizes[id] ?? .zero
-            let size = CGSize(width: frame.width > tile.width + 2 ? frame.width : known.width,
-                              height: frame.height > tile.height + 2 ? frame.height : known.height)
-            if size.width > known.width + 2 || size.height > known.height + 2 {
+            // bigger than its tile: that's its minimum; smaller than a learned minimum: it never was one
+            // (VLC keeps its video's aspect, so a wide tile once made it look 1036 tall at the least)
+            func learn(_ got: CGFloat, _ tile: CGFloat, _ known: CGFloat) -> CGFloat {
+                got > tile + 2 || got < known - 2 ? got : known
+            }
+            let size = CGSize(width: learn(frame.width, tile.width, known.width), height: learn(frame.height, tile.height, known.height))
+            if abs(size.width - known.width) > 2 || abs(size.height - known.height) > 2 {
                 minSizes[id] = size
                 learned = true
             }
+            centre(windows[id]!, frame, in: tile)
         }
         unsettled = []
         // the window may have settled bigger than its tile since the outline was drawn
         if learned { relayout() } else { showFocus() }
+    }
+
+    /** A window its app keeps smaller than its tile sits in the tile's middle on that axis, not stuck in a corner. */
+    func centre(_ window: AXUIElement, _ frame: CGRect, in tile: CGRect) {
+        var to = CGPoint(x: frame.width < tile.width - 2 ? tile.midX - frame.width / 2 : tile.minX,
+                         y: frame.height < tile.height - 2 ? tile.midY - frame.height / 2 : tile.minY)
+        guard abs(to.x - frame.minX) > 2 || abs(to.y - frame.minY) > 2 else { return }
+        AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, AXValueCreate(.cgPoint, &to)!)
     }
 
     /** Whether it moved the window. */

@@ -71,8 +71,9 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
 
 - Windows on other Spaces aren't listed by AX; `sync` keeps them while the window server (`CGWindowList .optionAll`) still has them. Space IDs come from private CGS calls in `AX.swift` (`spaces()`, `spaces(of:)`), the same ones yabai uses.
 - No animation; frames snap.
+- Apps that keep a window smaller than its tile (VLC's aspect lock) can't be made to fill it: `centre` puts them in the tile's middle (after `learnMinSizes`, and when the app resizes itself) instead of fighting. Fix things like this in Seam, not by changing the app's settings (user's rule, 2026-10-15).
 - Apps with a minimum size: 0.3s after a relayout, `learnMinSizes` notices a window that came out
-  bigger than its tile (read later because some apps resize late; reading at once learned bogus
+  bigger than its tile, or smaller than a learned minimum (VLC keeps its video aspect, so its "minimum" height follows its width) (read later because some apps resize late; reading at once learned bogus
   minimums), records it in `minSizes`, and lays out again; every tile is at least `minPane` (200) both ways (`Tiler.minSize`); `layout()` pins such children to their minimum
   and shares the rest. Shrinking a window already at its learned minimum forgets it (relearned if
   real); Retile Everything clears them all. `⌘⌥=` marks the row's other windows `squeezed`:
