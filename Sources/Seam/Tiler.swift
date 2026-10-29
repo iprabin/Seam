@@ -6,7 +6,8 @@ var floatingApps: Set<String> {
     set { UserDefaults.standard.set(newValue.sorted(), forKey: "floatingApps") }
 }
 
-let axCallback: AXObserverCallback = { _, element, note, _ in tiler.handle(note as String, element) }
+// a window's own notifications carry its ID (as yabai does), so even a destroyed one needs no call into its app
+let axCallback: AXObserverCallback = { _, element, note, refcon in tiler.handle(note as String, element, refcon.map { Int(bitPattern: $0) }) }
 
 final class Tiler: NSObject {
     /** One tree per Space per display. */
@@ -33,6 +34,10 @@ final class Tiler: NSObject {
     /** Where that narrowed window sits: -1 left, 0 centre, 1 right. */
     var soloSide: [Int: Int] = [:]
     var settle: DispatchWorkItem?
+    /** One queue per app: its windows are set in order, different apps at once, and none holds up Seam. */
+    var queues: [pid_t: DispatchQueue] = [:]
+    /** Windows with a frame on its way; what they report meanwhile is half done. */
+    var moving: [Int: Int] = [:]
     /** A tiled window the user is moving or resizing with the mouse. */
     var dragging: Int?
     var resizing: Int?
@@ -45,20 +50,25 @@ final class Tiler: NSObject {
     func start() {
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1)
         let workspace = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
-            workspace.addObserver(forName: name, object: nil, queue: .main) { _ in self.sync() }
+        // every app is watched from the start, so its new windows announce themselves
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy != .prohibited { observe(app.pid) }
+        workspace.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { note in
+            if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, app.activationPolicy != .prohibited { self.observe(app.pid) }
+            self.sync()
         }
+        workspace.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { _ in self.sync() }
         workspace.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { _ in
-            // the switch is done: bring the outline over, the slow AX rescan can wait a frame
+            // the switch is done: bring the outline over, the AX rescan can wait a frame
             self.border.orderOut(nil)
             self.border.alphaValue = 0
-            // windows on the other Space may have been put back to their own size meanwhile
-            self.applied = [:]
+            // windows on the other Space may have been put back to their own size meanwhile: those are set again
+            for (id, rect) in self.applied where windowFrame(id) != rect { self.applied[id] = nil }
             self.relayout()
             NSAnimationContext.runAnimationGroup { $0.duration = 0.25; self.border.animator().alphaValue = 1 }
             DispatchQueue.main.async { self.sync() }
         }
-        workspace.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in self.showFocus() }
+        // an app coming to the front may show a window no notification announced (one started through a launcher, like Device Hub)
+        workspace.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in self.sync() }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in self.relayout() }
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDragged) { _ in self.mouseDragged() }
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { _ in self.mouseUp() }
@@ -68,34 +78,33 @@ final class Tiler: NSObject {
 
     // MARK: windows
 
-    /** Picks up new windows, forgets closed ones, and lays everything out. */
+    /**
+     * Picks up windows nothing announced, forgets closed ones, and lays everything out. Like yabai, only an
+     * app showing a window Seam hasn't met is asked for its windows: each ask is a call into the app, and a
+     * busy one (mid Space switch) takes up to a second to answer.
+     */
     func sync() {
-        var seen = Set<Int>()
-        // accessory apps (menu bar apps like Wallpaper) open real windows too; isStandard filters their panels
-        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy != .prohibited && $0.processIdentifier != getpid() }.map { ($0, $0.pid) }
-        for (app, pid) in apps {
-            if observers[pid] == nil { observe(pid) }
-            let appWindows = AXUIElementCreateApplication(pid).value(kAXWindowsAttribute) as? [AXUIElement] ?? []
-            for window in appWindows {
-                guard let id = window.windowID else { continue }
-                seen.insert(id)
-                if windows[id] != nil { continue }
-                windows[id] = window
-                watch(window, pid)
-                // smaller than a tile's minimum either way, it's a popup (Finder's Empty Trash), not a workspace
-                if treeKey(of: id) == nil, window.isStandard, let frame = window.frame, frame.width >= minPane, frame.height >= minPane,
-                   !floatingApps.contains(app.bundleIdentifier ?? "") { tile(id, near: lastFocus) }
-            }
+        let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+        var ask = Set<pid_t>()
+        for w in list where w[kCGWindowLayer as String] as? Int == 0 && w[kCGWindowIsOnscreen as String] as? Bool == true {
+            // smaller than a tile's minimum either way it's a popup (Finder's Empty Trash), never tiled
+            guard let id = w[kCGWindowNumber as String] as? Int, windows[id] == nil, let pid = w[kCGWindowOwnerPID as String] as? Int,
+                  let r = (w[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }),
+                  r.width >= minPane, r.height >= minPane else { continue }
+            ask.insert(pid_t(pid))
         }
-        let live = Set(apps.map(\.1))
-        for (pid, observer) in observers where !live.contains(pid) {
+        // accessory apps (menu bar apps like Wallpaper) open real windows too; isStandard filters their panels
+        for pid in ask where pid != getpid() && NSRunningApplication(processIdentifier: pid)?.activationPolicy != .prohibited {
+            for window in AXUIElementCreateApplication(pid).value(kAXWindowsAttribute) as? [AXUIElement] ?? [] { add(window) }
+        }
+        for (pid, observer) in observers where kill(pid, 0) != 0 && errno == ESRCH {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
             observers[pid] = nil
         }
         // Accessibility only lists the current Space's windows; one still in the
         // window server is on another Space, so it keeps its place (zero room here)
-        let existing = windowIDs([.optionAll])
-        for id in Set(windows.keys).union(trees.values.flatMap(leaves)) where !seen.contains(id) && !existing.contains(id) { forget(id) }
+        let existing = Set(list.compactMap { $0[kCGWindowNumber as String] as? Int })
+        for id in Set(windows.keys).union(trees.values.flatMap(leaves)) where !existing.contains(id) { forget(id) }
         // a window sent to another desktop (Mission Control) joins that desktop's tree
         for (key, tree) in trees {
             for id in leaves(tree) {
@@ -109,9 +118,20 @@ final class Tiler: NSObject {
         relayout()
     }
 
+    /** Starts watching a window and tiles it, unless it's a dialog, a popup or its app never tiles. */
+    func add(_ window: AXUIElement) {
+        guard let id = window.windowID, windows[id] == nil else { return }
+        let pid = window.pid
+        observe(pid)
+        windows[id] = window
+        watch(window, id)
+        if treeKey(of: id) == nil, window.isStandard, let frame = windowFrame(id), frame.width >= minPane, frame.height >= minPane,
+           !floatingApps.contains(bundle(pid)) { tile(id, near: lastFocus) }
+    }
+
     func observe(_ pid: pid_t) {
         var observer: AXObserver?
-        guard AXObserverCreate(pid, axCallback, &observer) == .success, let observer else { return }
+        guard pid != getpid(), observers[pid] == nil, AXObserverCreate(pid, axCallback, &observer) == .success, let observer else { return }
         let app = AXUIElementCreateApplication(pid)
         for note in [kAXWindowCreatedNotification, kAXFocusedWindowChangedNotification, kAXApplicationHiddenNotification, kAXApplicationShownNotification] {
             AXObserverAddNotification(observer, app, note as CFString, nil)
@@ -120,27 +140,30 @@ final class Tiler: NSObject {
         observers[pid] = observer
     }
 
-    func watch(_ window: AXUIElement, _ pid: pid_t) {
-        guard let observer = observers[pid] else { return }
+    /** The window's own notifications, each carrying its ID. */
+    func watch(_ window: AXUIElement, _ id: Int) {
+        guard let observer = observers[window.pid] else { return }
         for note in [kAXUIElementDestroyedNotification, kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowMiniaturizedNotification, kAXWindowDeminiaturizedNotification] {
-            AXObserverAddNotification(observer, window, note as CFString, nil)
+            AXObserverAddNotification(observer, window, note as CFString, UnsafeMutableRawPointer(bitPattern: id))
         }
     }
 
-    func handle(_ note: String, _ element: AXUIElement) {
+    /** `watched` is the window's ID for its own notifications, nil for its app's. */
+    func handle(_ note: String, _ element: AXUIElement, _ watched: Int?) {
         switch note {
         case kAXWindowMovedNotification, kAXWindowResizedNotification:
+            guard let id = watched else { return }
             // Only the user's own drag of one window: ours happen with the mouse
             // up, or are the neighbours given way to a live edge resize. A click
             // (switching window) can land mid-relayout, or on an app snapping its
             // size (Terminal's character grid): that's not a resize.
-            guard NSEvent.pressedMouseButtons & 1 != 0, mouseMoved, let id = element.windowID, id != zoomed, treeKey(of: id) != nil,
+            guard NSEvent.pressedMouseButtons & 1 != 0, mouseMoved, id != zoomed, treeKey(of: id) != nil,
                   (resizing ?? dragging ?? id) == id else {
-                guard NSEvent.pressedMouseButtons & 1 == 0 else { return }
+                guard NSEvent.pressedMouseButtons & 1 == 0, moving[id] == nil else { return }
                 // an app moving its own tile (Zoom grows to the whole screen after login) goes back;
                 // only a moved origin counts: an app minimum keeps it and only grows the size
                 // ponytail: an app that always moves itself back would ping-pong; cap retries if one does
-                if let id = element.windowID, id != zoomed, let tile = applied[id], let frame = element.frame {
+                if id != zoomed, let tile = applied[id], let frame = element.frame {
                     // grown past a learned maximum (an app that resized late), it never was one: give it its room back
                     if let most = maxSizes[id], frame.width > most.width + 2 || frame.height > most.height + 2 {
                         maxSizes[id] = nil
@@ -149,7 +172,8 @@ final class Tiler: NSObject {
                     }
                     // smaller than its tile is the app's own choice (VLC keeps its video's aspect): centre it, don't fight
                     if frame.width < tile.width - 2 || frame.height < tile.height - 2 { centre(element, frame, in: tile) }
-                    else if abs(frame.minX - tile.minX) > 2 || abs(frame.minY - tile.minY) > 2 {
+                    // going native fullscreen moves it too: leave that be
+                    else if abs(frame.minX - tile.minX) > 2 || abs(frame.minY - tile.minY) > 2, !element.isFullScreen {
                         applied[id] = nil
                         return relayout()
                     }
@@ -169,12 +193,22 @@ final class Tiler: NSObject {
             }
         case kAXFocusedWindowChangedNotification:
             guard let id = element.windowID else { return }
-            if windows[id] == nil { sync() }
+            add(element)
             if treeKey(of: id) != nil { lastFocus = id }
-            showFocus()
+            // focus moves on when a window closes, and an app that only hides it (close to the menu bar) sends nothing else
+            relayout()
+        case kAXWindowCreatedNotification:
+            add(element)
+            relayout()
+            // a new window may not be on screen for a moment yet
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.relayout() }
+        case kAXUIElementDestroyedNotification:
+            guard let id = watched else { return }
+            forget(id)
+            relayout()
         default:
-            sync()
-            // a new or restored window may not be on screen for a moment yet
+            // minimised, restored, app hidden or shown: a restored window may not be on screen for a moment yet
+            relayout()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.relayout() }
         }
     }
@@ -187,7 +221,7 @@ final class Tiler: NSObject {
     func tile(_ id: Int, near target: Int?) {
         if let target, target != id, let key = treeKey(of: target), let rect = layouts[key]?.panes[target] {
             trees[key] = insertBeside(trees[key]!, target, id, rect.width >= rect.height ? .right : .bottom)
-        } else if let frame = windows[id]?.frame {
+        } else if let frame = windowFrame(id) {
             var to = shownKey(screen(containing: CGPoint(x: frame.midX, y: frame.midY)), spaces().current)
             if let on = spaces(of: id).first { to.space = on }
             trees[to] = trees[to].map { appendLeaf($0, id) } ?? .leaf(id)
@@ -218,7 +252,7 @@ final class Tiler: NSObject {
 
     func relayout() {
         let screens = NSScreen.screens
-        let displays = Set(screens.map(key)), (current, all) = spaces()
+        let displays = Set(screens.map(key)), (current, all, fullscreen) = spaces()
         // a disconnected display's or deleted desktop's windows move to the main one; sync
         // then sends each to the desktop it's really on
         let main = shownKey(screens[0], current)
@@ -227,14 +261,13 @@ final class Tiler: NSObject {
             for id in leaves(tree) { trees[main] = trees[main].map { appendLeaf($0, id) } ?? .leaf(id) }
         }
         let onScreen = windowIDs([.optionOnScreenOnly, .excludeDesktopElements])
-        // asked once per window: an Accessibility call each, and layout asks many times
-        let shown = Set(windows.filter { onScreen.contains($0.key) && !$0.value.isFullScreen }.keys)
-        let visible = { (id: Int) in shown.contains(id) }
+        let visible = { (id: Int) in onScreen.contains(id) }
         layouts = [:]
         var placed: [Int] = []
         for screen in screens {
             let key = shownKey(screen, current)
-            guard let tree = trees[key] else { continue }
+            // a native fullscreen window's Space is its own: nothing to tile there
+            guard let tree = trees[key], !fullscreen.contains(key.space) else { continue }
             let area = tileArea(screen)
             var out = Layout()
             layout(tree, in: area, visible: visible, minSize: minSize, maxSize: maxSize, into: &out)
@@ -243,12 +276,16 @@ final class Tiler: NSObject {
             for (id, rect) in out.panes where place(id, id == zoomed ? area : lone ? solo(id, rect) : rect) && id != zoomed { placed.append(id) }
         }
         unsettled.formUnion(placed)
+        scheduleSettle()
+        showFocus()
+    }
+
+    func scheduleSettle() {
         settle?.cancel()
         let check = DispatchWorkItem { self.learnMinSizes() }
         settle = check
         // some apps take a moment to resize; reading straight away mistakes that for a minimum
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: check)
-        showFocus()
     }
 
     /** Outlines the focused tile: with no gaps, nothing else shows which one it is. */
@@ -258,9 +295,10 @@ final class Tiler: NSObject {
         }
         // an app with a bigger minimum spills past its tile: outline the window itself, kept on its screen
         let area = tileArea(screen(containing: CGPoint(x: rect.midX, y: rect.midY)))
-        let frame = windows[id]?.frame.map { $0.intersection(area) }.flatMap { $0.isEmpty ? nil : $0 } ?? rect
-        border.setFrame(flip(frame), display: true)
-        border.orderFrontRegardless()
+        let frame = flip(windows[id]?.frame.map { $0.intersection(area) }.flatMap { $0.isEmpty ? nil : $0 } ?? rect)
+        // each is a call to the window server, and this runs on every move of every window
+        if border.frame != frame { border.setFrame(frame, display: true) }
+        if !border.isVisible { border.orderFrontRegardless() }
     }
 
     /**
@@ -270,8 +308,9 @@ final class Tiler: NSObject {
      */
     func learnMinSizes() {
         var learned = false
+        guard moving.isEmpty else { return }
         for id in unsettled where id != dragging && id != resizing && !squeezed.contains(id) {
-            guard let frame = windows[id]?.frame, let tile = applied[id] else { continue }
+            guard let window = windows[id], let frame = window.frame, let tile = applied[id] else { continue }
             let known = minSizes[id] ?? .zero
             // bigger than its tile: that's its minimum; smaller than a learned minimum: it never was one
             // (VLC keeps its video's aspect, so a wide tile once made it look 1036 tall at the least)
@@ -291,7 +330,7 @@ final class Tiler: NSObject {
                 maxSizes[id] = frame.size
                 learned = true
             }
-            centre(windows[id]!, frame, in: tile)
+            centre(window, frame, in: tile)
         }
         unsettled = []
         // the window may have settled bigger than its tile since the outline was drawn
@@ -318,8 +357,23 @@ final class Tiler: NSObject {
     func place(_ id: Int, _ rect: CGRect) -> Bool {
         guard id != dragging, id != resizing, applied[id] != rect else { return false }
         let most = maxSize(id), width = min(rect.width, most.width), height = min(rect.height, most.height)
-        windows[id]?.setFrame(CGRect(x: rect.midX - width / 2, y: rect.midY - height / 2, width: width, height: height))
         applied[id] = rect
+        guard let window = windows[id] else { return true }
+        let frame = CGRect(x: rect.midX - width / 2, y: rect.midY - height / 2, width: width, height: height), pid = window.pid
+        let queue = queues[pid] ?? DispatchQueue(label: "seam.app.\(pid)")
+        queues[pid] = queue
+        moving[id, default: 0] += 1
+        queue.async {
+            window.setFrame(frame)
+            DispatchQueue.main.async {
+                self.moving[id]! -= 1
+                if self.moving[id] == 0 { self.moving[id] = nil }
+                // the size check and the outline wait for the slowest app
+                guard self.moving.isEmpty else { return }
+                self.scheduleSettle()
+                self.showFocus()
+            }
+        }
         return true
     }
 

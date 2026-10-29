@@ -10,12 +10,15 @@ extension Tiler {
         for layout in layouts.values {
             if let target = paneAt(layout.panes, point, except: dragging), let rect = layout.panes[target] {
                 let zone = zoneAt(rect, point)
+                // every mouse move lands here; the window server only hears of a change
+                guard drop.map({ $0 != (target, zone) }) ?? true else { return }
                 drop = (target, zone)
                 overlay.setFrame(flip(zoneRect(rect, zone)), display: true)
                 overlay.orderFrontRegardless()
                 return
             }
         }
+        guard drop != nil else { return }
         drop = nil
         overlay.orderOut(nil)
     }
@@ -49,7 +52,7 @@ extension Tiler {
 
     /** Dragging a tile's edge moves the seam on that side, as dragging the seam would. */
     func resizeFromEdges(_ id: Int) {
-        guard let key = treeKey(of: id), let old = layouts[key]?.panes[id], let new = windows[id]?.frame else { return }
+        guard let key = treeKey(of: id), let old = layouts[key]?.panes[id], let new = windowFrame(id) else { return }
         let edges: [(Dir, CGFloat, CGFloat)] = [
             (.row, old.minX, new.minX), (.row, old.maxX, new.maxX),
             (.column, old.minY, new.minY), (.column, old.maxY, new.maxY),

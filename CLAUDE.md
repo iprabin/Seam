@@ -54,12 +54,18 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
   - `main.swift`: `--selftest`, menu bar item, Accessibility prompt, run loop.
   - Window identity = `CGWindowID` via private `_AXUIElementGetWindow`.
   - App pids come from `NSRunningApplication.pid` (AX.swift), never `processIdentifier`: an app started through a launcher (Xcode's Device Hub, via `DevicesTrampoline`) reads -1, so it's looked up as its windows' owner by executable path.
-  - `sync()` rescans every app's AX windows (regular + accessory, so menu bar apps' windows tile) (add new, forget gone), then `relayout()`.
-    Called on almost any AX notification; cheap enough, simple and self-healing.
-  - `relayout()` computes `layouts` per display and sets frames; `applied` skips windows already
-    at their rect (avoids fighting apps and needless AX calls); cleared on a Space switch since windows there may have been reset meanwhile.
-  - Visibility = `CGWindowListCopyWindowInfo(.optionOnScreenOnly)` minus native-fullscreen windows,
-    which covers minimised, hidden apps and other Spaces.
+  - Event-driven, like yabai: every app is observed from launch; a window's own notifications carry its ID as
+    the observer refcon, so `kAXUIElementDestroyed` is handled without calling into its (maybe gone) app.
+    Window created → `add` + `relayout`; focus change → `relayout` (also catches apps that hide a window on close).
+  - `sync()` (launch/quit/app activation/Space switch) reads `CGWindowList` and asks only apps showing a window
+    Seam hasn't met for their AX windows: each ask is a synchronous call into the app, and a busy one takes up to 1s.
+  - Frames: `windowFrame` (window server, never blocks) for rough checks only; it reports animations (open spring,
+    Mission Control scaling, Space slide), so the outline and min/max learning read the app's AX `frame`.
+    Reading the window server there once drew the outline shrunk and learned bogus max sizes.
+  - `relayout()` computes `layouts` per display and sets frames (`place`: on a serial queue per app, so apps resize at once and a slow one holds up nothing; `moving` marks frames on their way, whose half-done moves `handle` and `learnMinSizes` ignore); `applied` skips windows already
+    at their rect (avoids fighting apps and needless AX calls); on a Space switch, dropped for windows no longer at their rect.
+  - Visibility = `CGWindowListCopyWindowInfo(.optionOnScreenOnly)` (minimised, hidden apps, other Spaces);
+    native fullscreen Spaces (CGS space `type` 4) are skipped whole.
   - Distinguishing user drags from our own `setFrame`: moved/resized notifications only count
     while the left mouse button is down, and only for the first window touched in that drag
     (the neighbours we resize live also send notifications).

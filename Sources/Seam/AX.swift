@@ -55,6 +55,21 @@ extension NSRunningApplication {
     }
 }
 
+/** Its app's bundle ID, by pid. */
+func bundle(_ pid: pid_t) -> String {
+    (NSRunningApplication(processIdentifier: pid) ?? NSWorkspace.shared.runningApplications.first { $0.pid == pid })?.bundleIdentifier ?? ""
+}
+
+/**
+ * A window's frame as the window server has it: no call into its app, which may be busy for a while. Mid
+ * animation (opening, Mission Control, a Space switch) it's the animated one, so what's learned or drawn
+ * from a frame (sizes, the outline) asks the app (`frame`); this is for rough checks only.
+ */
+func windowFrame(_ id: Int) -> CGRect? {
+    let info = (CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(id)) as? [[String: Any]])?.first
+    return (info?[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
+}
+
 /** AppKit is bottom-left origin, Accessibility top-left; the flip is its own inverse. */
 func flip(_ r: CGRect) -> CGRect {
     CGRect(x: r.minX, y: NSScreen.screens[0].frame.height - r.maxY, width: r.width, height: r.height)
@@ -82,18 +97,21 @@ struct TreeKey: Hashable {
     var display: CGDirectDisplayID
 }
 
-/** Each display's current Space ("Main" when displays share Spaces), and every Space that exists. */
-func spaces() -> (current: [String: UInt64], all: Set<UInt64>) {
+/** Each display's current Space ("Main" when displays share Spaces), every Space that exists, and the native fullscreen ones. */
+func spaces() -> (current: [String: UInt64], all: Set<UInt64>, fullscreen: Set<UInt64>) {
     let list = CGSCopyManagedDisplaySpaces(CGSMainConnectionID())?.takeRetainedValue() as? [[String: Any]] ?? []
-    var current: [String: UInt64] = [:], all = Set<UInt64>()
+    var current: [String: UInt64] = [:], all = Set<UInt64>(), fullscreen = Set<UInt64>()
     for display in list {
         let id = display["Display Identifier"] as? String ?? "Main"
         current[id] = ((display["Current Space"] as? [String: Any])?["id64"] as? NSNumber)?.uint64Value
         for space in display["Spaces"] as? [[String: Any]] ?? [] {
-            if let s = (space["id64"] as? NSNumber)?.uint64Value { all.insert(s) }
+            guard let s = (space["id64"] as? NSNumber)?.uint64Value else { continue }
+            all.insert(s)
+            // type 4: an app's own fullscreen Space
+            if space["type"] as? Int == 4 { fullscreen.insert(s) }
         }
     }
-    return (current, all)
+    return (current, all, fullscreen)
 }
 
 /** The tree shown on `screen` right now. */
