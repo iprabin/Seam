@@ -306,9 +306,9 @@ final class Tiler: NSObject {
         AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, AXValueCreate(.cgPoint, &to)!)
     }
 
-    /** A lone window's tile, narrowed to its `soloWidth` (never under its minimum) and put at its `soloSide`. */
+    /** A lone window's tile, narrowed to its `soloWidth` (never under its minimum, never past its maximum) and put at its `soloSide`. */
     func solo(_ id: Int, _ rect: CGRect) -> CGRect {
-        let width = min(rect.width, max(rect.width * (soloWidth[id] ?? 1), minSize(id).width)).rounded()
+        let width = min(rect.width, maxSize(id).width, max(rect.width * (soloWidth[id] ?? 1), minSize(id).width)).rounded()
         let x = rect.minX + ((rect.width - width) * CGFloat((soloSide[id] ?? 0) + 1) / 2).rounded()
         return CGRect(x: x, y: rect.minY, width: width, height: rect.height)
     }
