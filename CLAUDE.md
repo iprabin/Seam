@@ -1,97 +1,39 @@
 # Seam
 
-i3-style auto-tiling window manager for macOS, native Swift, no dependencies.
-**Opinionated, zero config**: keys, gaps and float rules are hardcoded on purpose.
-Don't add a config file or settings UI unless the user asks. The one exception the user asked for:
-which apps never tile (`floatingApps`, UserDefaults key `floatingApps`, toggled by `⌘⌥⇧C`).
+i3-style auto-tiling window manager for macOS. Native Swift, no dependencies.
+
+## Rules (from the user)
+
+- Zero config, hardcoded on purpose: no config file or settings UI. Only exception: `floatingApps` (UserDefaults, `⌘⌥⇧C`).
+- Every shortcut is ⌘⌥ + key; ⇧ is the only extra modifier allowed. Shortcuts live in `bindings` (Tiler+Keys.swift), which also builds the menu.
+- Misbehaving app windows (VLC aspect lock, Device Hub fixed size) are handled in Seam (`minSizes` / `maxSizes` / `centre`), never by changing the app's settings.
+- Gaps are 0. Layout is not persisted. No animation.
+- After every change: `./build.sh` and relaunch build/Seam.app.
 
 ## Build / run / test
 
 ```fish
-swift build && .build/debug/Seam --selftest   # tree logic self-check, prints "selftest ok"
-./build.sh                                     # release build → build/Seam.app, signed with Apple Development cert
-open build/Seam.app                            # needs Accessibility permission (prompts once)
-swift icon.swift                               # redraw icon.png (build.sh makes the .icns from it)
+swift build && .build/debug/Seam --selftest   # tree asserts, prints "selftest ok"
+./build.sh                                     # release → build/Seam.app, signed with Apple Development cert
+open build/Seam.app                            # needs Accessibility permission
+swift icon.swift                               # redraw icon.png
 ```
 
-Signing with the dev cert (not ad-hoc) keeps the Accessibility grant across rebuilds.
-If it stops working after a rebuild: System Settings › Privacy › Accessibility, remove Seam and add it again.
-Running `.build/debug/Seam` directly attributes the permission to the terminal instead.
+Dev-cert signing keeps the Accessibility grant across rebuilds. If it breaks: Privacy › Accessibility, remove and re-add Seam. Don't run `.build/debug/Seam` for real use: the permission attributes to the terminal.
 
-## Features (behaviour the user asked for)
+## Layout
 
-| Feature | Where |
-|---|---|
-| Auto-tile: new window splits the biggest tile on the focused display along its longer side; stacks instead of making a column under `minColumn` (550) | `Tiler.tile` |
-| No gaps: tiles sit edge to edge (`gap = 0` in Tree.swift, user's choice) | `gap` |
-| Resize by dragging a tiled window's edge; neighbours follow live | `handle` → `resizeFromEdges` → `shift` |
-| Drag a window onto another (like Zen browser): edge = split there, middle = swap, blue preview | `mouseDragged`/`mouseUp`/`move` |
-| Float toggle `⌘⌥C` per window (centres it, this session only: window IDs don't survive app restarts); `⌘⌥⇧C` turns tiling off/on for the focused window's whole app, saved in UserDefaults (`floatingApps`, seeded with System Settings + Calculator), menu title names the app (`menuNeedsUpdate`); dialogs and windows opening under `minPane` either way (Finder's Empty Trash popup) always float | `toggleFloat`, `toggleAppFloat`, `AXUIElement.isStandard` |
-| `⌘⌥ ←→↑↓` swap places with the window that way (each keeps its size when in the same row/stack, `swapPlaces`), `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow width by 10% of its row, down to its min / up to the others at theirs (`grow`; height in a stack only if no row; a window alone on its display narrows/widens about its middle instead, remembered per window as `soloWidth`, applied by `solo` in `relayout`, cleared by `⌘⌥0`; while narrowed (or capped by its app, `maxSizes`), `⌘⌥←→` step it left / centre / right (`soloSide`) before swapping across displays) | `bindings` |
-| `⌘⌥T` flips the focused window's group row ⇄ column (i3 `layout toggle split`) | `flipFocused`, `flipSplit` |
-| `⌘⌥S` toggles: pulls the next window in reading order (previous if last) under the focused one; on a stacked window, takes it out beside the stack and evens out that row's widths | `stackNext`, `unstack` |
-| `⌘⌥0` evens out every split on the focused window's display (i3 `balance`) and un-squeezes them | `balance`, `balanced` |
-| Rainbow outline, colours running round it (static conic gradient; used to spin, stilled for WindowServer GPU;  2px, rounded 16 like windows; user wanted it fun) round the focused window (its real frame, clipped to its screen, so an app minimum spilling past the tile is outlined whole), since zero gaps hide it; none when zoomed or floating | `showFocus`, `border` |
-| One tree per desktop (Space) per display (`TreeKey`), so each desktop keeps its own layout; a window moved to another desktop joins its tree; unplugged display's / deleted desktop's windows move to main | `trees`, `relayout`, `sync` |
-| Menu bar item lists every shortcut (built from `bindings`, clicking runs it), Retile Everything, Quit | `bindings`, `addShortcuts` |
+- `Tree.swift`: pure, no AppKit. `Node` = leaf(windowID) | split(dir, children, shares). `layout()` gives hidden windows zero room but keeps them in the tree, so seam paths always index the real tree. Add an assert to `treeSelfTest()` for any tree change. Conceptual twin of `~/Desktop/Mobile/manga-reader/src/components/tiling/tree.ts`.
+- `Tiler` is one class split by file: `Tiler.swift` (state, `sync`, `relayout`, min/max size learning), `Tiler+Mouse.swift` (drag to move/split, edge resize), `Tiler+Keys.swift` (bindings, hotkeys, menu), `AX.swift` (AX helpers, `flip()`, private CGS space calls), `main.swift`.
+- One tree per Space per display (`TreeKey`).
 
-**Every shortcut is ⌘⌥ + key** (user's rule; ⇧ is the only extra modifier allowed). They are
-system-wide, so they shadow app shortcuts (e.g. ⌘⌥←→ tab switching in browsers). Any other app
-holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is taken").
+## Gotchas (learned the hard way)
 
-## Architecture
-
-- `Sources/Seam/Tree.swift`: pure, no AppKit. Port of
-  `~/Desktop/Mobile/manga-reader/src/components/tiling/tree.ts` (same semantics, keep them in sync
-  conceptually). `Node` = leaf(windowID) | split(dir, children, shares summing to 1).
-  `layout()` gives hidden windows zero room but keeps their place, so seam paths always index the
-  *real* tree. `treeSelfTest()` holds the asserts; add one there for any tree change.
-- Side effects, split by concern (`Tiler` is one class, extended per file):
-  - `AX.swift`: `AXUIElement` helpers, coordinate `flip()`, screen lookups.
-  - `Tiler.swift`: state, window discovery (`sync`), `relayout`, min-size learning.
-  - `Tiler+Mouse.swift`: drag-to-move/split, edge resize, drop preview.
-  - `Tiler+Keys.swift`: `Binding`, keyboard actions, hotkey + menu registration.
-  - `main.swift`: `--selftest`, menu bar item, Accessibility prompt, run loop.
-  - Window identity = `CGWindowID` via private `_AXUIElementGetWindow`.
-  - App pids come from `NSRunningApplication.pid` (AX.swift), never `processIdentifier`: an app started through a launcher (Xcode's Device Hub, via `DevicesTrampoline`) reads -1, so it's looked up as its windows' owner by executable path.
-  - Event-driven, like yabai: every app is observed from launch; a window's own notifications carry its ID as
-    the observer refcon, so `kAXUIElementDestroyed` is handled without calling into its (maybe gone) app.
-    Window created → `add` + `relayout`; focus change → `relayout` (also catches apps that hide a window on close).
-  - The focused window is cached (`focused`): set by the focus-changed notification, refreshed by `focusedID()` (a
-    call into the frontmost app) only on an app switch and on key actions. `showFocus` reads the cache, since it
-    runs on every relayout and asking a busy app blocked Seam for up to the 1s messaging timeout each time.
-  - `sync()` (launch/quit/app activation/Space switch) reads the on-screen `CGWindowList` (the full list cost 1.1ms
-    against 0.17ms) and asks only apps showing a window Seam hasn't met for their AX windows: each ask is a synchronous
-    call into the app, and a busy one takes up to 1s. A tracked window that's off screen is gone when
-    `CGSCopySpacesForWindows` lists no Space for it; one call per tree (all its windows at once) says whether any
-    moved desktop before each is asked.
-  - Frames: `windowFrame` (window server, never blocks) for rough checks only; it reports animations (open spring,
-    Mission Control scaling, Space slide), so the outline and min/max learning read the app's AX `frame`.
-    Reading the window server there once drew the outline shrunk and learned bogus max sizes.
-  - `relayout()` computes `layouts` per display and sets frames (`place`: on a serial queue per app, so apps resize at once and a slow one holds up nothing; `moving` marks frames on their way, whose half-done moves `handle` and `learnMinSizes` ignore); `applied` skips windows already
-    at their rect (avoids fighting apps and needless AX calls); on a Space switch, dropped for windows no longer at their rect.
-  - Visibility = `CGWindowListCopyWindowInfo(.optionOnScreenOnly)` (minimised, hidden apps, other Spaces);
-    native fullscreen Spaces (CGS space `type` 4) are skipped whole.
-  - Distinguishing user drags from our own `setFrame`: moved/resized notifications only count
-    while the left mouse button is down, and only for the first window touched in that drag
-    (the neighbours we resize live also send notifications).
-  - Resizing: the edge diff against the window's layout rect becomes a seam shift each
-    resized notification; the layout updates, so the next diff is incremental.
-  - History: there used to be drag handles (`SeamView`) in the gaps; removed when gaps went to 0
-    (see git log). Bring them back if gaps return and the user wants a grab area.
-  - Coordinates: tree/AX use top-left origin of the main display; AppKit is bottom-left. Use `flip()`.
-
-## Known limits / next ideas
-
-- Windows on other Spaces aren't listed by AX; `sync` keeps them while the window server (`CGWindowList .optionAll`) still has them. Space IDs come from private CGS calls in `AX.swift` (`spaces()`, `spaces(of:)`), the same ones yabai uses.
-- No animation; frames snap.
-- Apps that keep a window smaller than its tile (VLC's aspect lock) can't be made to fill it: `centre` puts them in the tile's middle (after `learnMinSizes`, and when the app resizes itself) instead of fighting. A window well short (50pt) of its tile *both* ways won't grow at all (Device Hub's device view): `learnMinSizes` records it in `maxSizes`, `layout()` caps its tile there along the split (neighbours take the rest; same water-filling as minimums, solved by bisection), and `place` sets it straight to the middle of its tile, so it doesn't jump on every Space switch (`applied` is cleared then). Short one way only is aspect (VLC), never a maximum. Forgotten when the window grows past it (`handle`), on `⌘⌥=`, and by Retile Everything. Fix things like this in Seam, not by changing the app's settings (user's rule, 2026-10-15).
-- Apps with a minimum size: 0.3s after a relayout, `learnMinSizes` notices a window that came out
-  bigger than its tile, or smaller than a learned minimum (VLC keeps its video aspect, so its "minimum" height follows its width) (read later because some apps resize late; reading at once learned bogus
-  minimums), records it in `minSizes`, and lays out again; every tile is at least `minPane` (200) both ways (`Tiler.minSize`); `layout()` pins such children to their minimum
-  and shares the rest. Shrinking a window already at its learned minimum forgets it (relearned if
-  real); Retile Everything clears them all. `⌘⌥=` marks the row's other windows `squeezed`:
-  their app minimums are ignored (floor `minPane` only), so they run on under the focused window;
-  `⌘⌥-` un-squeezes them. Otherwise, if the minimums add up to more than the screen, windows still overlap.
-- Layout isn't persisted (user removed it): restarting Seam re-tiles every window from scratch.
-- Not tested yet on real windows by the user at time of writing (2026-10-13): first feedback pending.
+- Coordinates: tree/AX are top-left of main display, AppKit bottom-left. Use `flip()`.
+- Window ID = `CGWindowID` via private `_AXUIElementGetWindow`. App pid from `NSRunningApplication.pid`, never `processIdentifier` (launcher-started apps read -1).
+- Never block on a busy app: `focused` is cached; `showFocus` reads the cache. `sync()` reads `CGWindowList` and asks only apps with unmet windows for AX windows (each ask can take 1s).
+- `windowFrame` (window server) reports animations; use the AX `frame` for the outline and min/max learning, or you learn bogus sizes.
+- Min sizes are read 0.3s after relayout (`learnMinSizes`); some apps resize late.
+- User drags vs our `setFrame`: moved/resized notifications count only while the left button is down, and only for the first window touched in that drag.
+- `applied` skips windows already at their rect; cleared on Space switch for windows that moved.
+- Native fullscreen Spaces (CGS type 4) are skipped whole.
