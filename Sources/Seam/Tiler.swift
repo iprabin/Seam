@@ -238,9 +238,16 @@ final class Tiler: NSObject {
     }
 
     /** Beside `target`, splitting it along its longer side, like i3 on a new window. */
+    /**
+     * A new window splits the biggest tile on `target`'s display (not the focused one, so
+     * widths don't depend on which window happened to be focused: 2 halves, then a 2x2 grid),
+     * along its longer side; a column that would come out under `minColumn` stacks instead.
+     */
     func tile(_ id: Int, near target: Int?) {
-        if let target, target != id, let key = treeKey(of: target), let rect = layouts[key]?.panes[target] {
-            trees[key] = insertBeside(trees[key]!, target, id, rect.width >= rect.height ? .right : .bottom)
+        if let target, target != id, let key = treeKey(of: target), let panes = layouts[key]?.panes,
+           let (target, rect) = panes.filter({ $0.key != id }).max(by: { $0.value.width * $0.value.height < $1.value.width * $1.value.height }) {
+            let zone: Zone = rect.width >= rect.height && rect.width / 2 >= minColumn ? .right : .bottom
+            trees[key] = insertBeside(trees[key]!, target, id, zone)
         } else if let frame = windowFrame(id) {
             var to = shownKey(screen(containing: CGPoint(x: frame.midX, y: frame.midY)), spaces().current)
             if let on = spaces(of: [id]).first { to.space = on }

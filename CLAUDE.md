@@ -22,7 +22,7 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 
 | Feature | Where |
 |---|---|
-| Auto-tile: new window splits the focused one along its longer side | `Tiler.tile` |
+| Auto-tile: new window splits the biggest tile on the focused display along its longer side; stacks instead of making a column under `minColumn` (550) | `Tiler.tile` |
 | No gaps: tiles sit edge to edge (`gap = 0` in Tree.swift, user's choice) | `gap` |
 | Resize by dragging a tiled window's edge; neighbours follow live | `handle` → `resizeFromEdges` → `shift` |
 | Drag a window onto another (like Zen browser): edge = split there, middle = swap, blue preview | `mouseDragged`/`mouseUp`/`move` |

@@ -18,6 +18,8 @@ indirect enum Node: Equatable {
 /** Space between tiles and around them; 0 = edge to edge, by the user's choice. */
 let gap: CGFloat = 0
 let minPane: CGFloat = 200
+/** Narrowest column a new window may make; narrower and it stacks instead (a terminal under ~550 is useless). */
+let minColumn: CGFloat = 550
 
 func leaves(_ node: Node) -> [Int] {
     switch node {
