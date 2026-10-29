@@ -57,8 +57,14 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
   - Event-driven, like yabai: every app is observed from launch; a window's own notifications carry its ID as
     the observer refcon, so `kAXUIElementDestroyed` is handled without calling into its (maybe gone) app.
     Window created → `add` + `relayout`; focus change → `relayout` (also catches apps that hide a window on close).
-  - `sync()` (launch/quit/app activation/Space switch) reads `CGWindowList` and asks only apps showing a window
-    Seam hasn't met for their AX windows: each ask is a synchronous call into the app, and a busy one takes up to 1s.
+  - The focused window is cached (`focused`): set by the focus-changed notification, refreshed by `focusedID()` (a
+    call into the frontmost app) only on an app switch and on key actions. `showFocus` reads the cache, since it
+    runs on every relayout and asking a busy app blocked Seam for up to the 1s messaging timeout each time.
+  - `sync()` (launch/quit/app activation/Space switch) reads the on-screen `CGWindowList` (the full list cost 1.1ms
+    against 0.17ms) and asks only apps showing a window Seam hasn't met for their AX windows: each ask is a synchronous
+    call into the app, and a busy one takes up to 1s. A tracked window that's off screen is gone when
+    `CGSCopySpacesForWindows` lists no Space for it; one call per tree (all its windows at once) says whether any
+    moved desktop before each is asked.
   - Frames: `windowFrame` (window server, never blocks) for rough checks only; it reports animations (open spring,
     Mission Control scaling, Space slide), so the outline and min/max learning read the app's AX `frame`.
     Reading the window server there once drew the outline shrunk and learned bogus max sizes.

@@ -46,8 +46,7 @@ extension NSRunningApplication {
     /** Its process. An app started through a launcher (Xcode's Device Hub) reads -1, so it's found as its windows' owner. */
     var pid: pid_t {
         guard processIdentifier <= 0, let path = executableURL?.path else { return processIdentifier }
-        let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
-        for owner in Set(list.compactMap { $0[kCGWindowOwnerPID as String] as? Int }) {
+        for owner in Set(windowList(.optionAll).compactMap { $0[kCGWindowOwnerPID as String] as? Int }) {
             var buf = [CChar](repeating: 0, count: 4096)
             if proc_pidpath(pid_t(owner), &buf, UInt32(buf.count)) > 0, String(cString: buf) == path { return pid_t(owner) }
         }
@@ -66,8 +65,16 @@ func bundle(_ pid: pid_t) -> String {
  * from a frame (sizes, the outline) asks the app (`frame`); this is for rough checks only.
  */
 func windowFrame(_ id: Int) -> CGRect? {
-    let info = (CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(id)) as? [[String: Any]])?.first
-    return (info?[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
+    windowList(.optionIncludingWindow, id).first.flatMap(bounds)
+}
+
+/** The window server's windows (`options` picks which), each as its info dictionary. */
+func windowList(_ options: CGWindowListOption, _ window: Int = Int(kCGNullWindowID)) -> [[String: Any]] {
+    CGWindowListCopyWindowInfo(options, CGWindowID(window)) as? [[String: Any]] ?? []
+}
+func ids(_ list: [[String: Any]]) -> Set<Int> { Set(list.compactMap { $0[kCGWindowNumber as String] as? Int }) }
+func bounds(_ info: [String: Any]) -> CGRect? {
+    (info[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
 }
 
 /** AppKit is bottom-left origin, Accessibility top-left; the flip is its own inverse. */
@@ -121,8 +128,8 @@ func shownKey(_ screen: NSScreen, _ current: [String: UInt64]) -> TreeKey {
     return TreeKey(space: uuid.flatMap { current[$0] } ?? current["Main"] ?? 0, display: display)
 }
 
-/** The Spaces a window is on: several for one shown on all desktops. */
-func spaces(of window: Int) -> [UInt64] {
-    let list = CGSCopySpacesForWindows(CGSMainConnectionID(), 7, [window] as CFArray)?.takeRetainedValue() as? [NSNumber] ?? []
+/** The Spaces the windows are on, between them: several for one shown on all desktops, none for a closed one. */
+func spaces(of windows: [Int]) -> [UInt64] {
+    let list = CGSCopySpacesForWindows(CGSMainConnectionID(), 7, windows as CFArray)?.takeRetainedValue() as? [NSNumber] ?? []
     return list.map(\.uint64Value)
 }

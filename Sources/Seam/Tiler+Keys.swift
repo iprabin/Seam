@@ -22,11 +22,14 @@ struct Binding {
 extension Tiler {
     // MARK: keyboard
 
+    /** Asks the frontmost app (a call into it, so only on a user's action or an app switch) and remembers the answer. */
+    @discardableResult
     func focusedID() -> Int? {
         guard let app = NSWorkspace.shared.frontmostApplication,
               let window = AXUIElementCreateApplication(app.pid).value(kAXFocusedWindowAttribute)
         else { return nil }
-        return (window as! AXUIElement).windowID
+        focused = (window as! AXUIElement).windowID
+        return focused
     }
 
     /** The tile just past `id`'s edge on `zone`'s side, on any display. */

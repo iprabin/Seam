@@ -57,9 +57,13 @@ extension Tiler {
             (.row, old.minX, new.minX), (.row, old.maxX, new.maxX),
             (.column, old.minY, new.minY), (.column, old.maxY, new.maxY),
         ]
+        var moved = false
         for (dir, was, now) in edges where abs(now - was) > 2 {
-            if let seam = seam(key, beside: old, dir, at: was) { moveSeam(key, seam, by: now - was) }
+            guard let seam = seam(key, beside: old, dir, at: was) else { continue }
+            moveSeam(key, seam, by: now - was)
+            moved = true
         }
+        if moved { relayout() }
     }
 
     /** The seam running along `tile`'s edge at `edge`. */
@@ -73,23 +77,16 @@ extension Tiler {
         }
     }
 
+    /** Trades `px` of room between the seam's two sides; both stop at their minimums. The tree changes; the layout follows on `relayout`. */
     func moveSeam(_ key: TreeKey, _ seam: SeamInfo, by px: CGFloat) {
-        guard let shares = trees[key].flatMap({ sizes(at: seam.path[...], in: $0) }) else { return }
-        shift(key, seam, before: shares[seam.a], after: shares[seam.b], by: px)
-    }
-
-    /** Trades `px` of room between the seam's two sides; both stop at their minimums. */
-    func shift(_ screen: TreeKey, _ seam: SeamInfo, before: Double, after: Double, by px: CGFloat) {
-        let pair = before + after
+        guard let tree = trees[key], let shares = sizes(at: seam.path[...], in: tree) else { return }
+        let before = shares[seam.a], pair = before + shares[seam.b]
         let least = Double(minPane / seam.pxPerShare)
         let size = min(max(before + Double(px / seam.pxPerShare), least), pair - least)
-        trees[screen] = trees[screen].map {
-            updatingSizes($0, at: seam.path[...]) { sizes in
-                sizes[seam.a] = size
-                sizes[seam.b] = pair - size
-            }
+        trees[key] = updatingSizes(tree, at: seam.path[...]) { sizes in
+            sizes[seam.a] = size
+            sizes[seam.b] = pair - size
         }
-        relayout()
     }
 
     // MARK: the drop preview
