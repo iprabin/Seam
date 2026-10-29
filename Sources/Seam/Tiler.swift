@@ -119,7 +119,8 @@ final class Tiler: NSObject {
         observe(pid)
         windows[id] = window
         watch(window, id)
-        if treeKey(of: id) == nil, window.isStandard, let frame = windowFrame(id), frame.width >= minPane, frame.height >= minPane,
+        // the AX frame: the window server has nothing yet for a window just created
+        if treeKey(of: id) == nil, window.isStandard, let frame = window.frame, frame.width >= minPane, frame.height >= minPane,
            !floatingApps.contains(bundle(pid)) { tile(id, near: lastFocus) }
     }
 
@@ -218,7 +219,7 @@ final class Tiler: NSObject {
            let (target, rect) = panes.filter({ $0.key != id }).max(by: { $0.value.width * $0.value.height < $1.value.width * $1.value.height }) {
             let zone: Zone = rect.width >= rect.height && rect.width / 2 >= minColumn ? .right : .bottom
             trees[key] = insertBeside(tree, target, id, zone)
-        } else if let frame = windowFrame(id) {
+        } else if let frame = windows[id]?.frame {
             var to = shownKey(screen(containing: frame.center), spaces().current)
             if let on = spaces(of: [id]).first { to.space = on }
             append(id, to: to)
