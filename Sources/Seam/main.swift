@@ -1,8 +1,6 @@
 import AppKit
 
-// Seam: i3-style auto tiling for macOS. Opinionated, no config. Every shortcut is
-// ⌘⌥ + a key (see `bindings`, which the menu bar item also lists); drag a window
-// onto another to split or swap, drag a window's edge to resize.
+// Seam: i3-style auto tiling for macOS. Opinionated, no config. See CLAUDE.md.
 
 if CommandLine.arguments.contains("--selftest") {
     treeSelfTest()
@@ -26,8 +24,7 @@ statusItem.menu = menu
 
 if AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) {
     tiler.start()
-} else {
-    // starts as soon as it's allowed in System Settings › Privacy › Accessibility
+} else { // starts once allowed in System Settings › Privacy › Accessibility
     Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
         guard AXIsProcessTrusted() else { return }
         timer.invalidate()

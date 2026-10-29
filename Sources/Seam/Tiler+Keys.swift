@@ -22,17 +22,18 @@ struct Binding {
 extension Tiler {
     // MARK: keyboard
 
-    /** Asks the frontmost app (a call into it, so only on a user's action or an app switch) and remembers the answer. */
+    /** Asks the frontmost app (blocks on it), so only on a user action or app switch. */
     @discardableResult
     func focusedID() -> Int? {
         guard let app = NSWorkspace.shared.frontmostApplication,
-              let window = AXUIElementCreateApplication(app.pid).value(kAXFocusedWindowAttribute)
+              let window = AXUIElementCreateApplication(app.pid).value(kAXFocusedWindowAttribute),
+              CFGetTypeID(window) == AXUIElementGetTypeID()
         else { return nil }
         focused = (window as! AXUIElement).windowID
         return focused
     }
 
-    /** The tile just past `id`'s edge on `zone`'s side, on any display. */
+    /** The tile just past `id`'s edge, on any display. */
     func neighbour(_ id: Int, _ zone: Zone) -> Int? {
         guard let key = treeKey(of: id), let r = layouts[key]?.panes[id] else { return nil }
         let reach: CGFloat = 10
@@ -42,13 +43,12 @@ extension Tiler {
         case .top: CGPoint(x: r.midX, y: r.minY - reach)
         case .bottom, .center: CGPoint(x: r.midX, y: r.maxY + reach)
         }
-        return layouts.values.lazy.compactMap { paneAt($0.panes, point, except: id) }.first
+        return pane(at: point, except: id)
     }
 
-    /** Trades places with the window that way; the layout's shape stays as it is. */
+    /** Swaps with the window that way; a narrowed lone window steps left / centre / right first. */
     func moveFocused(_ zone: Zone) {
         guard let id = focusedID() else { return }
-        // a narrowed lone window steps left / centre / right first; past the edge it swaps as usual
         let step = zone == .left ? -1 : zone == .right ? 1 : 0, side = (soloSide[id] ?? 0) + step
         if step != 0, (-1...1).contains(side), let key = treeKey(of: id), let panes = layouts[key]?.panes, panes.count == 1,
            let area = panes[id], solo(id, area).width < area.width {
@@ -80,27 +80,24 @@ extension Tiler {
         } else if let before = floatZoomed.removeValue(forKey: id) {
             window.setFrame(before)
         } else if let frame = window.frame {
-            // a floating window fills the screen and comes back to where it was
             floatZoomed[id] = frame
-            window.setFrame(tileArea(screen(containing: CGPoint(x: frame.midX, y: frame.midY))))
+            window.setFrame(tileArea(screen(containing: frame.center)))
         }
     }
 
-    /** Lifts the window out of the tiling, centred; again puts it back where it's dropped. */
+    /** Out of the tiling, centred; or back in, where it sits. */
     func toggleFloat() {
         guard let id = focusedID(), let window = windows[id], window.isStandard, let frame = window.frame else { return }
-        let center = CGPoint(x: frame.midX, y: frame.midY)
         if treeKey(of: id) != nil {
             untile(id)
-            let area = tileArea(screen(containing: center))
+            let area = tileArea(screen(containing: frame.center))
             window.setFrame(area.insetBy(dx: area.width * 0.2, dy: area.height * 0.15))
         } else {
-            tile(id, near: layouts.values.lazy.compactMap { paneAt($0.panes, center, except: id) }.first ?? lastFocus)
+            tile(id, near: pane(at: frame.center, except: id) ?? lastFocus)
         }
         relayout()
     }
 
-    /** Turns tiling off for the focused window's whole app, or back on; remembered across restarts. */
     func toggleAppFloat() {
         guard let app = NSWorkspace.shared.frontmostApplication, let bundle = app.bundleIdentifier else { return }
         let off = !floatingApps.contains(bundle), pid = app.pid
@@ -111,10 +108,7 @@ extension Tiler {
         relayout()
     }
 
-    /**
-     * Pulls the next window in order (or the previous, at the end) in under the
-     * focused one; on a window already in a stack, takes it out beside the stack.
-     */
+    /** Pulls the next window (previous, at the end) under the focused one; on a stacked window, unstacks it. */
     func stackNext() {
         guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key] else { return }
         if isStacked(tree, id) {
@@ -129,27 +123,20 @@ extension Tiler {
         relayout()
     }
 
-    /** Flips the focused window's group between side by side and stacked. */
     func flipFocused() {
         guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key], var at = path(to: id, in: tree), at.popLast() != nil else { return }
         trees[key] = flipSplit(tree, at: at[...])
         relayout()
     }
 
-    /**
-     * Widens (or narrows) the focused window by `by` of its row, the others giving
-     * way in proportion, from its own minimum up to the others all at theirs.
-     * Outside any row it changes its height in its stack instead.
-     */
+    /** Widens the focused window by `by` of its nearest row (its stack, outside any row), the others giving way in proportion. Alone on its display it narrows about its middle. */
     func grow(_ by: CGFloat) {
         guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key], let panes = layouts[key]?.panes else { return }
-        // alone on its display it narrows or widens about its middle, down to its minimum, up to the whole width
         if panes.count == 1, let area = panes[id] {
             soloWidth[id] = min(max((soloWidth[id] ?? 1) + by, minSize(id).width / area.width), 1)
             return relayout()
         }
         guard let full = path(to: id, in: tree), !full.isEmpty else { return }
-        // the nearest row around it, else its own stack
         let depth = (0..<full.count).last { if case .split(.row, _, _)? = node(at: full.prefix($0), in: tree) { return true } else { return false } } ?? full.count - 1
         let at = full.prefix(depth), i = full[depth]
         guard case let .split(dir, children, sizes)? = node(at: at, in: tree) else { return }
@@ -162,14 +149,11 @@ extension Tiler {
         }
         let length = shown.reduce(0) { $0 + extent(children[$1]) }
         let least = { (j: Int) in minLength(children[j], dir, visible, self.minSize) }
-        // Growing squeezes the others below their apps' minimums: they run on under
-        // the focused window, which stays on top. Shrinking lets them have it back.
+        // growing squeezes the others under their app minimums; shrinking gives them back
         let others = shown.filter { $0 != i }.flatMap { leaves(children[$0]) }
         if by > 0 { squeezed.formUnion(others) } else { squeezed.subtract(others) }
-        // growing a window at its learned maximum tries bigger: relearned if it's real
+        // a learned limit in the way is forgotten and relearned if real
         if by > 0 { maxSizes[id] = nil }
-        // shrinking a window already at its learned minimum tries smaller: the
-        // minimum may be stale, and if it's real it's learned again
         if by < 0, extent(children[i]) <= least(i) + 2, case .leaf = children[i] { minSizes[id] = nil }
         let othersLeast = shown.filter { $0 != i }.reduce(0) { $0 + least($1) }
         let target = min(max(extent(children[i]) + by * length, least(i)), length - othersLeast)
@@ -182,7 +166,6 @@ extension Tiler {
         relayout()
     }
 
-    /** Evens out every split on the focused window's display; squeezed windows get their minimums back. */
     func balance() {
         guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key] else { return }
         trees[key] = balanced(tree)
@@ -191,9 +174,8 @@ extension Tiler {
         relayout()
     }
 
-    /** Every shortcut, in the order the menu lists them; `nil` is a separator. */
+    /** Every shortcut in menu order; `nil` is a separator. All are ⌘⌥, ⇧ the only extra, by the user's rule. */
     var bindings: [Binding?] {
-        // ⌘⌥ anchors every shortcut, by the user's choice; ⇧ is the only extra
         let move = UInt32(cmdKey | optionKey), focus = move | UInt32(shiftKey)
         let app = NSWorkspace.shared.frontmostApplication, name = app?.localizedName ?? "This App"
         let arrows: [(String, Int, Zone)] = [("Left", kVK_LeftArrow, .left), ("Right", kVK_RightArrow, .right), ("Up", kVK_UpArrow, .top), ("Down", kVK_DownArrow, .bottom)]
@@ -223,12 +205,12 @@ extension Tiler {
         for (i, binding) in bindings.enumerated() {
             guard let binding else { continue }
             var ref: EventHotKeyRef?
-            let status = RegisterEventHotKey(UInt32(binding.key), binding.modifiers, EventHotKeyID(signature: OSType(0x5345_414D), id: UInt32(i)), GetApplicationEventTarget(), 0, &ref)
+            let seam = OSType(0x5345_414D) // "SEAM"
+            let status = RegisterEventHotKey(UInt32(binding.key), binding.modifiers, EventHotKeyID(signature: seam, id: UInt32(i)), GetApplicationEventTarget(), 0, &ref)
             if status != noErr { print("Seam: \(binding.title) shortcut is taken, turn it off in Raycast") }
         }
     }
 
-    /** The menu lists every shortcut; picking one does it to the focused window. */
     func addShortcuts(to menu: NSMenu) {
         for (i, binding) in bindings.enumerated() {
             guard let binding else { menu.addItem(.separator()); continue }
@@ -247,7 +229,7 @@ extension Tiler {
 }
 
 extension Tiler: NSMenuDelegate {
-    /** Some titles name the frontmost app ("Never Tile Device Hub"), so they're redone each time the menu opens. */
+    /** Some titles name the frontmost app. */
     func menuNeedsUpdate(_ menu: NSMenu) {
         let current = bindings
         for item in menu.items where item.action == #selector(runBinding(_:)) { item.title = current[item.tag]?.title ?? item.title }

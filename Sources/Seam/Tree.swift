@@ -1,11 +1,7 @@
 import Foundation
 
-/**
- * The layout as a split tree, ported from manga-reader's tiling/tree.ts: a
- * window is a leaf, a split lays its children out along a row or a column
- * with a share each (summing to 1) and a seam between neighbours. Rects are
- * in Accessibility coordinates: top-left origin on the main display.
- */
+// The layout as a split tree (port of manga-reader's tiling/tree.ts): a window is a leaf, a split lays
+// its children out along a row or column with shares summing to 1. Rects are in AX coordinates (top-left origin).
 enum Dir { case row, column }
 /** Where a dragged window lands on another: beside it, or in its place. */
 enum Zone { case left, right, top, bottom, center }
@@ -15,10 +11,10 @@ indirect enum Node: Equatable {
     case split(Dir, [Node], [Double])
 }
 
-/** Space between tiles and around them; 0 = edge to edge, by the user's choice. */
+/** Space between tiles; 0 by the user's choice. */
 let gap: CGFloat = 0
 let minPane: CGFloat = 200
-/** Narrowest column a new window may make; narrower and it stacks instead (a terminal under ~550 is useless). */
+/** Narrowest column a new window may make; under that it stacks instead. */
 let minColumn: CGFloat = 550
 
 func leaves(_ node: Node) -> [Int] {
@@ -32,7 +28,7 @@ private func even(_ dir: Dir, _ children: [Node]) -> Node {
     .split(dir, children, children.map { _ in 1 / Double(children.count) })
 }
 
-/** A new window joins the outermost split, and every share there evens out. */
+/** Joins the root split, evening out its shares. */
 func appendLeaf(_ root: Node, _ id: Int) -> Node {
     switch root {
     case .leaf: return even(.row, [root, .leaf(id)])
@@ -40,7 +36,7 @@ func appendLeaf(_ root: Node, _ id: Int) -> Node {
     }
 }
 
-/** Its neighbours split its share; a split left with one child is replaced by it. */
+/** Neighbours take its share; a split left with one child collapses into it. */
 func removeLeaf(_ node: Node, _ id: Int) -> Node? {
     guard case let .split(dir, children, sizes) = node else { return node == .leaf(id) ? nil : node }
     var kept: [Node] = [], keptSizes: [Double] = []
@@ -63,7 +59,7 @@ func swapLeaves(_ node: Node, _ a: Int, _ b: Int) -> Node {
     }
 }
 
-/** Swaps two windows, and their shares too when they sit in the same split, so each keeps its size. */
+/** Like `swapLeaves`, but windows in the same split keep their sizes. */
 func swapPlaces(_ root: Node, _ a: Int, _ b: Int) -> Node {
     let swapped = swapLeaves(root, a, b)
     guard var pa = path(to: a, in: root), var pb = path(to: b, in: root),
@@ -71,11 +67,7 @@ func swapPlaces(_ root: Node, _ a: Int, _ b: Int) -> Node {
     return updatingSizes(swapped, at: pa[...]) { $0.swapAt(i, j) }
 }
 
-/**
- * Window `id` beside `target` on `zone`'s side. Inside a split that already
- * runs that way it joins it and halves the target's share; otherwise the
- * target splits in two.
- */
+/** `id` beside `target`: joins a split already running that way (halving the target's share), else splits the target in two. */
 func insertBeside(_ node: Node, _ target: Int, _ id: Int, _ zone: Zone) -> Node {
     let dir: Dir = zone == .left || zone == .right ? .row : .column
     let first = zone == .left || zone == .top
@@ -95,7 +87,7 @@ func insertBeside(_ node: Node, _ target: Int, _ id: Int, _ zone: Zone) -> Node 
     }
 }
 
-/** Dropping window `id` on `target`: the middle swaps them, an edge moves it there. */
+/** Centre swaps, an edge moves `id` there. */
 func dropLeaf(_ root: Node, _ id: Int, _ target: Int, _ zone: Zone) -> Node {
     if id == target { return root }
     if zone == .center { return swapLeaves(root, id, target) }
@@ -148,13 +140,10 @@ func isStacked(_ root: Node, _ id: Int) -> Bool {
     return true
 }
 
-/** Takes `id` out of its stack and puts it beside that stack: undoes stacking. */
+/** Takes `id` out of its stack and puts it beside it, left if it was the top so stack-then-unstack round-trips. */
 func unstack(_ root: Node, _ id: Int) -> Node {
     guard isStacked(root, id), var at = path(to: id, in: root), let j = at.popLast(),
           let without = removeLeaf(root, id) else { return root }
-    // what's left of the stack is still at `at`; a row around it takes the window in
-    // beside it (left if it was the stack's top, so stack-then-unstack round-trips),
-    // and every column of that row evens out
     let left = j == 0
     let parent = at.dropLast()
     if let i = at.last, case .split(.row, var children, _)? = node(at: parent, in: without) {
@@ -164,13 +153,13 @@ func unstack(_ root: Node, _ id: Int) -> Node {
     return updating(without, at: at[...]) { even(.row, left ? [.leaf(id), $0] : [$0, .leaf(id)]) }
 }
 
-/** Every split shares out evenly, like i3's `balance`. */
+/** Every split evened out (i3 `balance`). */
 func balanced(_ node: Node) -> Node {
     guard case let .split(dir, children, _) = node else { return node }
     return even(dir, children.map(balanced))
 }
 
-/** Turns the split at `path` from a row into a column or back, like i3's `layout toggle split`. */
+/** Row ⇄ column at `path` (i3 `layout toggle split`). */
 func flipSplit(_ node: Node, at path: ArraySlice<Int>) -> Node {
     guard case .split(let dir, var children, let sizes) = node else { return node }
     guard let first = path.first else { return .split(dir == .row ? .column : .row, children, sizes) }
@@ -185,7 +174,6 @@ struct SeamInfo {
     var b: Int
     var dir: Dir
     var rect: CGRect
-    /** Pixels per unit of share, to turn a drag into shares. */
     var pxPerShare: CGFloat
 }
 
@@ -195,16 +183,11 @@ struct Layout {
 }
 
 /**
- * Every visible window's rect and every seam. A hidden window (minimised, on
- * another Space, app hidden) keeps its place in the tree but takes no room,
- * so it comes back where it was. `minSize` is each window's smallest size its
- * app allows: a child below its minimum gets exactly that, and the rest share
- * what's left by their shares. If the minimums don't fit, windows overlap.
- * `maxSize` likewise: a window that won't grow (Device Hub's device view) gets
- * no more than that, and its neighbours take the rest.
+ * Every visible window's rect and every seam. A hidden window keeps its place but takes no room.
+ * A child is held between its `minSize` and `maxSize`; the rest share what's left. Minimums that don't fit overlap.
  */
 func layout(_ node: Node, in rect: CGRect, visible: (Int) -> Bool, minSize: (Int) -> CGSize = { _ in .zero },
-            maxSize: (Int) -> CGSize = { _ in CGSize(width: CGFloat.infinity, height: .infinity) }, path: [Int] = [], into out: inout Layout) {
+            maxSize: (Int) -> CGSize = { _ in .unbounded }, path: [Int] = [], into out: inout Layout) {
     switch node {
     case .leaf(let id):
         if visible(id) { out.panes[id] = rect }
@@ -215,12 +198,11 @@ func layout(_ node: Node, in rect: CGRect, visible: (Int) -> Bool, minSize: (Int
         let total = shown.reduce(0) { $0 + sizes[$1] }
         let length = (row ? rect.width : rect.height) - gap * CGFloat(shown.count - 1)
         let pxPerShare = length / CGFloat(total)
-        // each child gets t px per share, held between its minimum and maximum (the same sums, of
-        // maximums); t is halved in on until they fill the length
+        // bisect t (px per share) until the clamped children fill the length
         let mins = shown.map { minLength(children[$0], dir, visible, minSize) }
         let maxs = shown.map { minLength(children[$0], dir, visible, maxSize) }
         let fill = { (t: CGFloat) in shown.indices.map { min(max(t * CGFloat(sizes[shown[$0]]), mins[$0]), max(maxs[$0], mins[$0])) } }
-        var lo: CGFloat = 0, hi = length / CGFloat(max(shown.map { sizes[$0] }.min()!, 1e-9))
+        var lo: CGFloat = 0, hi = length / CGFloat(max(shown.map { sizes[$0] }.min() ?? 1, 1e-9))
         for _ in 0..<50 { let t = (lo + hi) / 2; if fill(t).reduce(0, +) < length { lo = t } else { hi = t } }
         let px = fill(hi)
         let end = row ? rect.maxX : rect.maxY
@@ -244,7 +226,7 @@ func layout(_ node: Node, in rect: CGRect, visible: (Int) -> Bool, minSize: (Int
     }
 }
 
-/** The least room `node` needs along `dir`: side by side adds up, stacked takes the largest. */
+/** Least room along `dir`: same direction adds up, across takes the largest. */
 func minLength(_ node: Node, _ dir: Dir, _ visible: (Int) -> Bool, _ minSize: (Int) -> CGSize) -> CGFloat {
     switch node {
     case .leaf(let id):
@@ -258,20 +240,19 @@ func minLength(_ node: Node, _ dir: Dir, _ visible: (Int) -> Bool, _ minSize: (I
     }
 }
 
-/** The window under a point, other than `except`; tiles never overlap. */
 func paneAt(_ panes: [Int: CGRect], _ point: CGPoint, except: Int) -> Int? {
     panes.first { $0.key != except && $0.value.contains(point) }?.key
 }
 
-/** Which part of `rect` the point is in: its middle, or the nearest edge. */
+/** The middle of `rect`, or its nearest edge. */
 func zoneAt(_ rect: CGRect, _ point: CGPoint) -> Zone {
     let dx = (point.x - rect.minX) / rect.width
     let dy = (point.y - rect.minY) / rect.height
-    if dx > 0.3 && dx < 0.7 && dy > 0.3 && dy < 0.7 { return .center }
-    return [(Zone.left, dx), (.right, 1 - dx), (.top, dy), (.bottom, 1 - dy)].min { $0.1 < $1.1 }!.0
+    if (0.3..<0.7).contains(dx), (0.3..<0.7).contains(dy) { return .center }
+    let edges: [(Zone, CGFloat)] = [(.left, dx), (.right, 1 - dx), (.top, dy), (.bottom, 1 - dy)]
+    return edges.min { $0.1 < $1.1 }?.0 ?? .center
 }
 
-/** The part of `rect` a drop on `zone` would take. */
 func zoneRect(_ r: CGRect, _ zone: Zone) -> CGRect {
     switch zone {
     case .left: return CGRect(x: r.minX, y: r.minY, width: r.width / 2, height: r.height)
@@ -282,7 +263,7 @@ func zoneRect(_ r: CGRect, _ zone: Zone) -> CGRect {
     }
 }
 
-/** `Seam --selftest`: the tree logic, without touching any windows. */
+/** `Seam --selftest` */
 func treeSelfTest() {
     let two = appendLeaf(.leaf(1), 2)
     precondition(two == .split(.row, [.leaf(1), .leaf(2)], [0.5, 0.5]), "second window")
@@ -317,16 +298,14 @@ func treeSelfTest() {
     out = Layout()
     layout(two, in: area, visible: { $0 == 2 }, into: &out)
     precondition(out.panes == [2: area] && out.seams.isEmpty, "hidden window takes no room")
-    // 4 across 400 wide, the second can't go under 160: it gets 160, the other three share 240
     let four: Node = .split(.row, (1...4).map { .leaf($0) }, [0.25, 0.25, 0.25, 0.25])
     out = Layout()
     layout(four, in: CGRect(x: 0, y: 0, width: 400 + 3 * gap, height: 100), visible: { _ in true },
            minSize: { $0 == 2 ? CGSize(width: 160, height: 0) : .zero }, into: &out)
     precondition(out.panes[2]!.width == 160 && out.panes[1]!.width == 80 && out.panes[4]!.width == 80, "minimum width honoured")
-    // the same row, the third won't grow past 40: the others share its leftover
     out = Layout()
     layout(four, in: CGRect(x: 0, y: 0, width: 400 + 3 * gap, height: 100), visible: { _ in true },
-           maxSize: { $0 == 3 ? CGSize(width: 40, height: CGFloat.infinity) : CGSize(width: CGFloat.infinity, height: CGFloat.infinity) }, into: &out)
+           maxSize: { $0 == 3 ? CGSize(width: 40, height: CGFloat.infinity) : .unbounded }, into: &out)
     precondition(out.panes[3]!.width == 40 && out.panes[1]!.width == 120 && out.panes[4]!.width == 120, "maximum width honoured")
     precondition(minLength(stacked, .row, { _ in true }, { _ in CGSize(width: 50, height: 70) }) == 100 + gap, "row adds up")
     precondition(minLength(stacked, .column, { _ in true }, { _ in CGSize(width: 50, height: 70) }) == 140 + gap, "stack adds up inside")

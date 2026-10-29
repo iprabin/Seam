@@ -18,22 +18,27 @@ extension AXUIElement {
         return pid
     }
     var frame: CGRect? {
-        guard let p = value(kAXPositionAttribute), let s = value(kAXSizeAttribute) else { return nil }
+        guard let p = value(kAXPositionAttribute), CFGetTypeID(p) == AXValueGetTypeID(),
+              let s = value(kAXSizeAttribute), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
         var origin = CGPoint.zero, size = CGSize.zero
         AXValueGetValue(p as! AXValue, .cgPoint, &origin)
         AXValueGetValue(s as! AXValue, .cgSize, &size)
         return CGRect(origin: origin, size: size)
     }
-    func setFrame(_ rect: CGRect) {
-        var origin = rect.origin, size = rect.size
-        let p = AXValueCreate(.cgPoint, &origin)!, s = AXValueCreate(.cgSize, &size)!
-        // size first so moving onto a smaller display isn't clamped, then again
-        // because the old position may have capped it
-        AXUIElementSetAttributeValue(self, kAXSizeAttribute as CFString, s)
+    func setPosition(_ point: CGPoint) {
+        var origin = point
+        guard let p = AXValueCreate(.cgPoint, &origin) else { return }
         AXUIElementSetAttributeValue(self, kAXPositionAttribute as CFString, p)
+    }
+    func setFrame(_ rect: CGRect) {
+        var size = rect.size
+        guard let s = AXValueCreate(.cgSize, &size) else { return }
+        // size, position, size again: either order alone gets clamped by the display the window is on
+        AXUIElementSetAttributeValue(self, kAXSizeAttribute as CFString, s)
+        setPosition(rect.origin)
         AXUIElementSetAttributeValue(self, kAXSizeAttribute as CFString, s)
     }
-    /** A normal, resizable window: not a dialog, sheet, panel or popover. */
+    /** Resizable and not a dialog, sheet, panel or popover. */
     var isStandard: Bool {
         var settable: DarwinBoolean = false
         AXUIElementIsAttributeSettable(self, kAXSizeAttribute as CFString, &settable)
@@ -43,7 +48,7 @@ extension AXUIElement {
 }
 
 extension NSRunningApplication {
-    /** Its process. An app started through a launcher (Xcode's Device Hub) reads -1, so it's found as its windows' owner. */
+    /** `processIdentifier` is -1 for an app started through a launcher (Device Hub); then it's found as its windows' owner. */
     var pid: pid_t {
         guard processIdentifier <= 0, let path = executableURL?.path else { return processIdentifier }
         for owner in Set(windowList(.optionAll).compactMap { $0[kCGWindowOwnerPID as String] as? Int }) {
@@ -54,21 +59,15 @@ extension NSRunningApplication {
     }
 }
 
-/** Its app's bundle ID, by pid. */
 func bundle(_ pid: pid_t) -> String {
     (NSRunningApplication(processIdentifier: pid) ?? NSWorkspace.shared.runningApplications.first { $0.pid == pid })?.bundleIdentifier ?? ""
 }
 
-/**
- * A window's frame as the window server has it: no call into its app, which may be busy for a while. Mid
- * animation (opening, Mission Control, a Space switch) it's the animated one, so what's learned or drawn
- * from a frame (sizes, the outline) asks the app (`frame`); this is for rough checks only.
- */
+/** From the window server, so it never blocks on the app; mid-animation it's the animated frame, so rough checks only. Use `frame` for anything learned or drawn. */
 func windowFrame(_ id: Int) -> CGRect? {
     windowList(.optionIncludingWindow, id).first.flatMap(bounds)
 }
 
-/** The window server's windows (`options` picks which), each as its info dictionary. */
 func windowList(_ options: CGWindowListOption, _ window: Int = Int(kCGNullWindowID)) -> [[String: Any]] {
     CGWindowListCopyWindowInfo(options, CGWindowID(window)) as? [[String: Any]] ?? []
 }
@@ -77,7 +76,7 @@ func bounds(_ info: [String: Any]) -> CGRect? {
     (info[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
 }
 
-/** AppKit is bottom-left origin, Accessibility top-left; the flip is its own inverse. */
+/** AppKit (bottom-left origin) ⇄ Accessibility (top-left); its own inverse. */
 func flip(_ r: CGRect) -> CGRect {
     CGRect(x: r.minX, y: NSScreen.screens[0].frame.height - r.maxY, width: r.width, height: r.height)
 }
@@ -85,26 +84,37 @@ func mouseAX() -> CGPoint {
     let m = NSEvent.mouseLocation
     return CGPoint(x: m.x, y: NSScreen.screens[0].frame.height - m.y)
 }
-func key(_ screen: NSScreen) -> CGDirectDisplayID {
-    (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
-}
 func screen(containing point: CGPoint) -> NSScreen {
     NSScreen.screens.first { flip($0.frame).contains(point) } ?? NSScreen.screens[0]
 }
 func tileArea(_ screen: NSScreen) -> CGRect { flip(screen.visibleFrame).insetBy(dx: gap, dy: gap) }
 
-// Spaces aren't public API; these window-server calls are what yabai and Amethyst use.
+extension NSScreen {
+    var displayID: CGDirectDisplayID {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    }
+}
+
+extension CGRect {
+    var center: CGPoint { CGPoint(x: midX, y: midY) }
+}
+
+extension CGSize {
+    static let unbounded = CGSize(width: CGFloat.infinity, height: .infinity)
+}
+
+// private Spaces API, the same calls yabai and Amethyst use
 @_silgen_name("CGSMainConnectionID") func CGSMainConnectionID() -> Int32
 @_silgen_name("CGSCopyManagedDisplaySpaces") func CGSCopyManagedDisplaySpaces(_ cid: Int32) -> Unmanaged<CFArray>?
 @_silgen_name("CGSCopySpacesForWindows") func CGSCopySpacesForWindows(_ cid: Int32, _ mask: Int32, _ windows: CFArray) -> Unmanaged<CFArray>?
 
-/** A tree per Space per display: each desktop keeps its own layout. */
+/** One tree per Space per display. */
 struct TreeKey: Hashable {
     var space: UInt64
     var display: CGDirectDisplayID
 }
 
-/** Each display's current Space ("Main" when displays share Spaces), every Space that exists, and the native fullscreen ones. */
+/** Each display's current Space ("Main" when displays share Spaces), every Space, and the native fullscreen ones. */
 func spaces() -> (current: [String: UInt64], all: Set<UInt64>, fullscreen: Set<UInt64>) {
     let list = CGSCopyManagedDisplaySpaces(CGSMainConnectionID())?.takeRetainedValue() as? [[String: Any]] ?? []
     var current: [String: UInt64] = [:], all = Set<UInt64>(), fullscreen = Set<UInt64>()
@@ -114,22 +124,21 @@ func spaces() -> (current: [String: UInt64], all: Set<UInt64>, fullscreen: Set<U
         for space in display["Spaces"] as? [[String: Any]] ?? [] {
             guard let s = (space["id64"] as? NSNumber)?.uint64Value else { continue }
             all.insert(s)
-            // type 4: an app's own fullscreen Space
-            if space["type"] as? Int == 4 { fullscreen.insert(s) }
+            if space["type"] as? Int == 4 { fullscreen.insert(s) } // 4: an app's own fullscreen Space
         }
     }
     return (current, all, fullscreen)
 }
 
-/** The tree shown on `screen` right now. */
 func shownKey(_ screen: NSScreen, _ current: [String: UInt64]) -> TreeKey {
-    let display = key(screen)
+    let display = screen.displayID
     let uuid = CGDisplayCreateUUIDFromDisplayID(display).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
     return TreeKey(space: uuid.flatMap { current[$0] } ?? current["Main"] ?? 0, display: display)
 }
 
-/** The Spaces the windows are on, between them: several for one shown on all desktops, none for a closed one. */
+/** The Spaces the windows are on: several for one on all desktops, none for a closed one. */
 func spaces(of windows: [Int]) -> [UInt64] {
-    let list = CGSCopySpacesForWindows(CGSMainConnectionID(), 7, windows as CFArray)?.takeRetainedValue() as? [NSNumber] ?? []
+    let allSpaces: Int32 = 7 // current, other and fullscreen Spaces alike
+    let list = CGSCopySpacesForWindows(CGSMainConnectionID(), allSpaces, windows as CFArray)?.takeRetainedValue() as? [NSNumber] ?? []
     return list.map(\.uint64Value)
 }
