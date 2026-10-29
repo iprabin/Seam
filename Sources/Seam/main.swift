@@ -16,6 +16,7 @@ let tiler = Tiler()
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 statusItem.button?.image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "Seam")
 let menu = NSMenu()
+menu.delegate = tiler
 tiler.addShortcuts(to: menu)
 menu.addItem(.separator())
 menu.addItem(withTitle: "Retile Everything", action: #selector(Tiler.retile), keyEquivalent: "").target = tiler

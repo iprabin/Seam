@@ -42,6 +42,19 @@ extension AXUIElement {
     var isFullScreen: Bool { value("AXFullScreen") as? Bool == true }
 }
 
+extension NSRunningApplication {
+    /** Its process. An app started through a launcher (Xcode's Device Hub) reads -1, so it's found as its windows' owner. */
+    var pid: pid_t {
+        guard processIdentifier <= 0, let path = executableURL?.path else { return processIdentifier }
+        let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+        for owner in Set(list.compactMap { $0[kCGWindowOwnerPID as String] as? Int }) {
+            var buf = [CChar](repeating: 0, count: 4096)
+            if proc_pidpath(pid_t(owner), &buf, UInt32(buf.count)) > 0, String(cString: buf) == path { return pid_t(owner) }
+        }
+        return processIdentifier
+    }
+}
+
 /** AppKit is bottom-left origin, Accessibility top-left; the flip is its own inverse. */
 func flip(_ r: CGRect) -> CGRect {
     CGRect(x: r.minX, y: NSScreen.screens[0].frame.height - r.maxY, width: r.width, height: r.height)

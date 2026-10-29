@@ -2,7 +2,8 @@
 
 i3-style auto-tiling window manager for macOS, native Swift, no dependencies.
 **Opinionated, zero config**: keys, gaps and float rules are hardcoded on purpose.
-Don't add a config file or settings UI unless the user asks.
+Don't add a config file or settings UI unless the user asks. The one exception the user asked for:
+which apps never tile (`floatingApps`, UserDefaults key `floatingApps`, toggled by `⌘⌥⇧C`).
 
 ## Build / run / test
 
@@ -25,8 +26,8 @@ Running `.build/debug/Seam` directly attributes the permission to the terminal i
 | No gaps: tiles sit edge to edge (`gap = 0` in Tree.swift, user's choice) | `gap` |
 | Resize by dragging a tiled window's edge; neighbours follow live | `handle` → `resizeFromEdges` → `shift` |
 | Drag a window onto another (like Zen browser): edge = split there, middle = swap, blue preview | `mouseDragged`/`mouseUp`/`move` |
-| Float toggle `⌘⌥C` (centres it); dialogs, windows opening under `minPane` either way (Finder's Empty Trash popup) + `floatingApps` always float | `toggleFloat`, `AXUIElement.isStandard` |
-| `⌘⌥ ←→↑↓` swap places with the window that way (each keeps its size when in the same row/stack, `swapPlaces`), `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow width by 10% of its row, down to its min / up to the others at theirs (`grow`; height in a stack only if no row) | `bindings` |
+| Float toggle `⌘⌥C` per window (centres it, this session only: window IDs don't survive app restarts); `⌘⌥⇧C` turns tiling off/on for the focused window's whole app, saved in UserDefaults (`floatingApps`, seeded with System Settings + Calculator), menu title names the app (`menuNeedsUpdate`); dialogs and windows opening under `minPane` either way (Finder's Empty Trash popup) always float | `toggleFloat`, `toggleAppFloat`, `AXUIElement.isStandard` |
+| `⌘⌥ ←→↑↓` swap places with the window that way (each keeps its size when in the same row/stack, `swapPlaces`), `⌘⌥⇧ ←→↑↓` focus, `⌘⌥↩` zoom to whole screen (tiled or floating), `⌘⌥ -/=` shrink/grow width by 10% of its row, down to its min / up to the others at theirs (`grow`; height in a stack only if no row; a window alone on its display narrows/widens about its middle instead, remembered per window as `soloWidth`, applied by `solo` in `relayout`, cleared by `⌘⌥0`; while narrowed, `⌘⌥←→` step it left / centre / right (`soloSide`) before swapping across displays) | `bindings` |
 | `⌘⌥T` flips the focused window's group row ⇄ column (i3 `layout toggle split`) | `flipFocused`, `flipSplit` |
 | `⌘⌥S` toggles: pulls the next window in reading order (previous if last) under the focused one; on a stacked window, takes it out beside the stack and evens out that row's widths | `stackNext`, `unstack` |
 | `⌘⌥0` evens out every split on the focused window's display (i3 `balance`) and un-squeezes them | `balance`, `balanced` |
@@ -52,6 +53,7 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
   - `Tiler+Keys.swift`: `Binding`, keyboard actions, hotkey + menu registration.
   - `main.swift`: `--selftest`, menu bar item, Accessibility prompt, run loop.
   - Window identity = `CGWindowID` via private `_AXUIElementGetWindow`.
+  - App pids come from `NSRunningApplication.pid` (AX.swift), never `processIdentifier`: an app started through a launcher (Xcode's Device Hub, via `DevicesTrampoline`) reads -1, so it's looked up as its windows' owner by executable path.
   - `sync()` rescans every app's AX windows (regular + accessory, so menu bar apps' windows tile) (add new, forget gone), then `relayout()`.
     Called on almost any AX notification; cheap enough, simple and self-healing.
   - `relayout()` computes `layouts` per display and sets frames; `applied` skips windows already
@@ -71,7 +73,7 @@ holding the same combo makes `RegisterEventHotKey` fail (logged as "shortcut is 
 
 - Windows on other Spaces aren't listed by AX; `sync` keeps them while the window server (`CGWindowList .optionAll`) still has them. Space IDs come from private CGS calls in `AX.swift` (`spaces()`, `spaces(of:)`), the same ones yabai uses.
 - No animation; frames snap.
-- Apps that keep a window smaller than its tile (VLC's aspect lock) can't be made to fill it: `centre` puts them in the tile's middle (after `learnMinSizes`, and when the app resizes itself) instead of fighting. Fix things like this in Seam, not by changing the app's settings (user's rule, 2026-10-15).
+- Apps that keep a window smaller than its tile (VLC's aspect lock) can't be made to fill it: `centre` puts them in the tile's middle (after `learnMinSizes`, and when the app resizes itself) instead of fighting. A window well short (50pt) of its tile *both* ways won't grow at all (Device Hub's device view): `learnMinSizes` records it in `maxSizes`, `layout()` caps its tile there along the split (neighbours take the rest; same water-filling as minimums, solved by bisection), and `place` sets it straight to the middle of its tile, so it doesn't jump on every Space switch (`applied` is cleared then). Short one way only is aspect (VLC), never a maximum. Forgotten when the window grows past it (`handle`), on `⌘⌥=`, and by Retile Everything. Fix things like this in Seam, not by changing the app's settings (user's rule, 2026-10-15).
 - Apps with a minimum size: 0.3s after a relayout, `learnMinSizes` notices a window that came out
   bigger than its tile, or smaller than a learned minimum (VLC keeps its video aspect, so its "minimum" height follows its width) (read later because some apps resize late; reading at once learned bogus
   minimums), records it in `minSizes`, and lays out again; every tile is at least `minPane` (200) both ways (`Tiler.minSize`); `layout()` pins such children to their minimum

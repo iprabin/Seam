@@ -1,7 +1,10 @@
 import AppKit
 
-/** Apps that always float: they're small panels, not workspaces. */
-let floatingApps: Set<String> = ["com.apple.systempreferences", "com.apple.calculator"]
+/** Apps that never tile: small panels by default, plus any the user turns off (`⌘⌥⇧C`); kept across restarts. */
+var floatingApps: Set<String> {
+    get { Set(UserDefaults.standard.stringArray(forKey: "floatingApps") ?? ["com.apple.systempreferences", "com.apple.calculator"]) }
+    set { UserDefaults.standard.set(newValue.sorted(), forKey: "floatingApps") }
+}
 
 let axCallback: AXObserverCallback = { _, element, note, _ in tiler.handle(note as String, element) }
 
@@ -19,10 +22,16 @@ final class Tiler: NSObject {
     var floatZoomed: [Int: CGRect] = [:]
     /** The smallest size each window's app has allowed it, learned by trying. */
     var minSizes: [Int: CGSize] = [:]
+    /** The largest size each window's app lets it have (Device Hub's device view), learned the same way. */
+    var maxSizes: [Int: CGSize] = [:]
     /** Windows resized since the last minimum-size check, and that pending check. */
     var unsettled: Set<Int> = []
     /** Windows made to give up room below their app's minimum by growing a neighbour. */
     var squeezed: Set<Int> = []
+    /** How much of the screen's width a window narrowed while alone on it keeps, when alone. */
+    var soloWidth: [Int: CGFloat] = [:]
+    /** Where that narrowed window sits: -1 left, 0 centre, 1 right. */
+    var soloSide: [Int: Int] = [:]
     var settle: DispatchWorkItem?
     /** A tiled window the user is moving or resizing with the mouse. */
     var dragging: Int?
@@ -63,9 +72,8 @@ final class Tiler: NSObject {
     func sync() {
         var seen = Set<Int>()
         // accessory apps (menu bar apps like Wallpaper) open real windows too; isStandard filters their panels
-        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy != .prohibited && $0.processIdentifier != getpid() }
-        for app in apps {
-            let pid = app.processIdentifier
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy != .prohibited && $0.processIdentifier != getpid() }.map { ($0, $0.pid) }
+        for (app, pid) in apps {
             if observers[pid] == nil { observe(pid) }
             let appWindows = AXUIElementCreateApplication(pid).value(kAXWindowsAttribute) as? [AXUIElement] ?? []
             for window in appWindows {
@@ -79,7 +87,7 @@ final class Tiler: NSObject {
                    !floatingApps.contains(app.bundleIdentifier ?? "") { tile(id, near: lastFocus) }
             }
         }
-        let live = Set(apps.map(\.processIdentifier))
+        let live = Set(apps.map(\.1))
         for (pid, observer) in observers where !live.contains(pid) {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
             observers[pid] = nil
@@ -133,6 +141,12 @@ final class Tiler: NSObject {
                 // only a moved origin counts: an app minimum keeps it and only grows the size
                 // ponytail: an app that always moves itself back would ping-pong; cap retries if one does
                 if let id = element.windowID, id != zoomed, let tile = applied[id], let frame = element.frame {
+                    // grown past a learned maximum (an app that resized late), it never was one: give it its room back
+                    if let most = maxSizes[id], frame.width > most.width + 2 || frame.height > most.height + 2 {
+                        maxSizes[id] = nil
+                        applied[id] = nil
+                        return relayout()
+                    }
                     // smaller than its tile is the app's own choice (VLC keeps its video's aspect): centre it, don't fight
                     if frame.width < tile.width - 2 || frame.height < tile.height - 2 { centre(element, frame, in: tile) }
                     else if abs(frame.minX - tile.minX) > 2 || abs(frame.minY - tile.minY) > 2 {
@@ -191,7 +205,10 @@ final class Tiler: NSObject {
         windows[id] = nil
         floatZoomed[id] = nil
         minSizes[id] = nil
+        maxSizes[id] = nil
         squeezed.remove(id)
+        soloWidth[id] = nil
+        soloSide[id] = nil
     }
 
     func windowIDs(_ options: CGWindowListOption) -> Set<Int> {
@@ -220,9 +237,10 @@ final class Tiler: NSObject {
             guard let tree = trees[key] else { continue }
             let area = tileArea(screen)
             var out = Layout()
-            layout(tree, in: area, visible: visible, minSize: minSize, into: &out)
+            layout(tree, in: area, visible: visible, minSize: minSize, maxSize: maxSize, into: &out)
             layouts[key] = out
-            for (id, rect) in out.panes where place(id, id == zoomed ? area : rect) && id != zoomed { placed.append(id) }
+            let lone = out.panes.count == 1
+            for (id, rect) in out.panes where place(id, id == zoomed ? area : lone ? solo(id, rect) : rect) && id != zoomed { placed.append(id) }
         }
         unsettled.formUnion(placed)
         settle?.cancel()
@@ -265,6 +283,14 @@ final class Tiler: NSObject {
                 minSizes[id] = size
                 learned = true
             }
+            // well short of its tile both ways, its app won't let it grow (Device Hub's device view): that's its
+            // maximum, and its tile shrinks to it. Short one way is an app keeping its aspect (VLC), which grows
+            // with the other side; a few points short is a terminal keeping to its character grid.
+            // ponytail: an app still resizing after 0.3s reads as capped; it heals when it grows (`handle`) or on ⌘⌥=
+            if frame.width < tile.width - 50, frame.height < tile.height - 50, maxSizes[id] != frame.size {
+                maxSizes[id] = frame.size
+                learned = true
+            }
             centre(windows[id]!, frame, in: tile)
         }
         unsettled = []
@@ -280,11 +306,19 @@ final class Tiler: NSObject {
         AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, AXValueCreate(.cgPoint, &to)!)
     }
 
-    /** Whether it moved the window. */
+    /** A lone window's tile, narrowed to its `soloWidth` (never under its minimum) and put at its `soloSide`. */
+    func solo(_ id: Int, _ rect: CGRect) -> CGRect {
+        let width = min(rect.width, max(rect.width * (soloWidth[id] ?? 1), minSize(id).width)).rounded()
+        let x = rect.minX + ((rect.width - width) * CGFloat((soloSide[id] ?? 0) + 1) / 2).rounded()
+        return CGRect(x: x, y: rect.minY, width: width, height: rect.height)
+    }
+
+    /** Whether it moved the window. One with a maximum goes straight to the middle of its tile, not its corner first. */
     @discardableResult
     func place(_ id: Int, _ rect: CGRect) -> Bool {
         guard id != dragging, id != resizing, applied[id] != rect else { return false }
-        windows[id]?.setFrame(rect)
+        let most = maxSize(id), width = min(rect.width, most.width), height = min(rect.height, most.height)
+        windows[id]?.setFrame(CGRect(x: rect.midX - width / 2, y: rect.midY - height / 2, width: width, height: height))
         applied[id] = rect
         return true
     }
@@ -295,12 +329,19 @@ final class Tiler: NSObject {
         return CGSize(width: max(learned.width, minPane), height: max(learned.height, minPane))
     }
 
+    func maxSize(_ id: Int) -> CGSize {
+        maxSizes[id] ?? CGSize(width: CGFloat.infinity, height: CGFloat.infinity)
+    }
+
     @objc func retile() {
         trees = [:]
         windows = [:]
         applied = [:]
         minSizes = [:]
+        maxSizes = [:]
         squeezed = []
+        soloWidth = [:]
+        soloSide = [:]
         zoomed = nil
         sync()
     }

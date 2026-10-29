@@ -24,7 +24,7 @@ extension Tiler {
 
     func focusedID() -> Int? {
         guard let app = NSWorkspace.shared.frontmostApplication,
-              let window = AXUIElementCreateApplication(app.processIdentifier).value(kAXFocusedWindowAttribute)
+              let window = AXUIElementCreateApplication(app.pid).value(kAXFocusedWindowAttribute)
         else { return nil }
         return (window as! AXUIElement).windowID
     }
@@ -44,7 +44,15 @@ extension Tiler {
 
     /** Trades places with the window that way; the layout's shape stays as it is. */
     func moveFocused(_ zone: Zone) {
-        guard let id = focusedID(), let target = neighbour(id, zone) else { return }
+        guard let id = focusedID() else { return }
+        // a narrowed lone window steps left / centre / right first; past the edge it swaps as usual
+        let step = zone == .left ? -1 : zone == .right ? 1 : 0, side = (soloSide[id] ?? 0) + step
+        if step != 0, (-1...1).contains(side), let key = treeKey(of: id), let panes = layouts[key]?.panes, panes.count == 1,
+           let area = panes[id], solo(id, area).width < area.width {
+            soloSide[id] = side
+            return relayout()
+        }
+        guard let target = neighbour(id, zone) else { return }
         move(id, onto: target, .center)
         relayout()
     }
@@ -89,6 +97,17 @@ extension Tiler {
         relayout()
     }
 
+    /** Turns tiling off for the focused window's whole app, or back on; remembered across restarts. */
+    func toggleAppFloat() {
+        guard let app = NSWorkspace.shared.frontmostApplication, let bundle = app.bundleIdentifier else { return }
+        let off = !floatingApps.contains(bundle), pid = app.pid
+        if off { floatingApps.insert(bundle) } else { floatingApps.remove(bundle) }
+        for (id, window) in windows where window.pid == pid && window.isStandard && (treeKey(of: id) != nil) == off {
+            if off { untile(id) } else { tile(id, near: lastFocus) }
+        }
+        relayout()
+    }
+
     /**
      * Pulls the next window in order (or the previous, at the end) in under the
      * focused one; on a window already in a stack, takes it out beside the stack.
@@ -120,8 +139,13 @@ extension Tiler {
      * Outside any row it changes its height in its stack instead.
      */
     func grow(_ by: CGFloat) {
-        guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key], let panes = layouts[key]?.panes,
-              let full = path(to: id, in: tree), !full.isEmpty else { return }
+        guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key], let panes = layouts[key]?.panes else { return }
+        // alone on its display it narrows or widens about its middle, down to its minimum, up to the whole width
+        if panes.count == 1, let area = panes[id] {
+            soloWidth[id] = min(max((soloWidth[id] ?? 1) + by, minSize(id).width / area.width), 1)
+            return relayout()
+        }
+        guard let full = path(to: id, in: tree), !full.isEmpty else { return }
         // the nearest row around it, else its own stack
         let depth = (0..<full.count).last { if case .split(.row, _, _)? = node(at: full.prefix($0), in: tree) { return true } else { return false } } ?? full.count - 1
         let at = full.prefix(depth), i = full[depth]
@@ -139,6 +163,8 @@ extension Tiler {
         // the focused window, which stays on top. Shrinking lets them have it back.
         let others = shown.filter { $0 != i }.flatMap { leaves(children[$0]) }
         if by > 0 { squeezed.formUnion(others) } else { squeezed.subtract(others) }
+        // growing a window at its learned maximum tries bigger: relearned if it's real
+        if by > 0 { maxSizes[id] = nil }
         // shrinking a window already at its learned minimum tries smaller: the
         // minimum may be stale, and if it's real it's learned again
         if by < 0, extent(children[i]) <= least(i) + 2, case .leaf = children[i] { minSizes[id] = nil }
@@ -158,6 +184,7 @@ extension Tiler {
         guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key] else { return }
         trees[key] = balanced(tree)
         squeezed.subtract(leaves(tree))
+        for id in leaves(tree) { soloWidth[id] = nil; soloSide[id] = nil }
         relayout()
     }
 
@@ -165,6 +192,7 @@ extension Tiler {
     var bindings: [Binding?] {
         // ⌘⌥ anchors every shortcut, by the user's choice; ⇧ is the only extra
         let move = UInt32(cmdKey | optionKey), focus = move | UInt32(shiftKey)
+        let app = NSWorkspace.shared.frontmostApplication, name = app?.localizedName ?? "This App"
         let arrows: [(String, Int, Zone)] = [("Left", kVK_LeftArrow, .left), ("Right", kVK_RightArrow, .right), ("Up", kVK_UpArrow, .top), ("Down", kVK_DownArrow, .bottom)]
         return arrows.map { name, key, zone in Binding(title: "Swap \(name)", key: key, modifiers: move) { self.moveFocused(zone) } }
             + [nil]
@@ -172,7 +200,9 @@ extension Tiler {
             + [nil,
                Binding(title: "Stack Next Window Under / Unstack", key: kVK_ANSI_S, modifiers: move, action: stackNext),
                Binding(title: "Flip Side by Side ⇄ Stacked", key: kVK_ANSI_T, modifiers: move, action: flipFocused),
-               Binding(title: "Float / Tile", key: kVK_ANSI_C, modifiers: move, action: toggleFloat),
+               Binding(title: "Float / Tile Window", key: kVK_ANSI_C, modifiers: move, action: toggleFloat),
+               Binding(title: floatingApps.contains(app?.bundleIdentifier ?? "") ? "Tile \(name) Again" : "Never Tile \(name)",
+                       key: kVK_ANSI_C, modifiers: focus, action: toggleAppFloat),
                Binding(title: "Whole Screen", key: kVK_Return, modifiers: move, action: toggleZoom),
                Binding(title: "Shrink", key: kVK_ANSI_Minus, modifiers: move) { self.grow(-0.1) },
                Binding(title: "Grow", key: kVK_ANSI_Equal, modifiers: move) { self.grow(0.1) },
@@ -211,4 +241,12 @@ extension Tiler {
     }
 
     @objc func runBinding(_ item: NSMenuItem) { bindings[item.tag]?.action() }
+}
+
+extension Tiler: NSMenuDelegate {
+    /** Some titles name the frontmost app ("Never Tile Device Hub"), so they're redone each time the menu opens. */
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let current = bindings
+        for item in menu.items where item.action == #selector(runBinding(_:)) { item.title = current[item.tag]?.title ?? item.title }
+    }
 }
