@@ -38,11 +38,18 @@ extension AXUIElement {
         setPosition(rect.origin)
         AXUIElementSetAttributeValue(self, kAXSizeAttribute as CFString, s)
     }
-    /** Resizable and not a dialog, sheet, panel or popover. */
+    /** What yabai manages, resizable too: a standard window on the normal level, on one Space. Not a dialog, sheet, panel, popover or always-on-top window (Firefox PiP). */
     var isStandard: Bool {
-        var settable: DarwinBoolean = false
-        AXUIElementIsAttributeSettable(self, kAXSizeAttribute as CFString, &settable)
-        return settable.boolValue && value(kAXSubroleAttribute) as? String == kAXStandardWindowSubrole
+        func settable(_ attribute: String) -> Bool {
+            var settable: DarwinBoolean = false
+            AXUIElementIsAttributeSettable(self, attribute as CFString, &settable)
+            return settable.boolValue
+        }
+        guard settable(kAXSizeAttribute), settable(kAXPositionAttribute), value(kAXSubroleAttribute) as? String == kAXStandardWindowSubrole,
+              let id = windowID else { return false }
+        var level: Int32 = 0
+        CGSGetWindowLevel(CGSMainConnectionID(), CGWindowID(id), &level)
+        return level == CGWindowLevelForKey(.normalWindow) && spaces(of: [id]).count <= 1
     }
     var isFullScreen: Bool { value("AXFullScreen") as? Bool == true }
 }
@@ -87,6 +94,18 @@ func mouseAX() -> CGPoint {
 func screen(containing point: CGPoint) -> NSScreen {
     NSScreen.screens.first { flip($0.frame).contains(point) } ?? NSScreen.screens[0]
 }
+/** Just past a corner of its display, the one overlapping other displays least: over another display a window shows, and joins that display's Space. macOS keeps a window from leaving entirely, so a pixel may show. */
+func parkingSpot(_ display: CGRect, others: [CGRect], size: CGSize) -> CGPoint {
+    let right = display.maxX - 1, left = display.minX + 1 - size.width, bottom = display.maxY - 1, top = display.minY + 1 - size.height
+    let spots = [CGPoint(x: right, y: bottom), CGPoint(x: left, y: bottom), CGPoint(x: right, y: top), CGPoint(x: left, y: top)]
+    func overlap(_ spot: CGPoint) -> CGFloat {
+        others.reduce(0) { sum, other in
+            let shared = other.intersection(CGRect(origin: spot, size: size))
+            return sum + (shared.isNull ? 0 : shared.width * shared.height)
+        }
+    }
+    return spots.min { overlap($0) < overlap($1) } ?? spots[0]
+}
 func tileArea(_ screen: NSScreen) -> CGRect { flip(screen.visibleFrame).insetBy(dx: gap, dy: gap) }
 
 extension NSScreen {
@@ -105,13 +124,15 @@ extension CGSize {
 
 // private Spaces API, the same calls yabai and Amethyst use
 @_silgen_name("CGSMainConnectionID") func CGSMainConnectionID() -> Int32
+@_silgen_name("CGSGetWindowLevel") @discardableResult func CGSGetWindowLevel(_ cid: Int32, _ window: CGWindowID, _ level: UnsafeMutablePointer<Int32>) -> Int32
 @_silgen_name("CGSCopyManagedDisplaySpaces") func CGSCopyManagedDisplaySpaces(_ cid: Int32) -> Unmanaged<CFArray>?
 @_silgen_name("CGSCopySpacesForWindows") func CGSCopySpacesForWindows(_ cid: Int32, _ mask: Int32, _ windows: CFArray) -> Unmanaged<CFArray>?
 
-/** One tree per Space per display. */
+/** One tree per workspace per Space per display. */
 struct TreeKey: Hashable {
     var space: UInt64
     var display: CGDirectDisplayID
+    var workspace = 1
 }
 
 /** Each display's current Space ("Main" when displays share Spaces), every Space, and the native fullscreen ones. */

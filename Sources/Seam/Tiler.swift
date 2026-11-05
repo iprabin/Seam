@@ -32,6 +32,12 @@ final class Tiler: NSObject {
     /** A lone window's width as a fraction of its display, and its side: -1 left, 0 centre, 1 right. */
     var soloWidth: [Int: CGFloat] = [:]
     var soloSide: [Int: Int] = [:]
+    /** The workspace showing on each display and Space, keyed with workspace 1; 1 if absent. */
+    var active: [TreeKey: Int] = [:]
+    /** The frame each window came with, to give back if it turns out not to tile. */
+    var born: [Int: CGRect] = [:]
+    /** Windows of hidden workspaces, waiting at `parkingSpot`. */
+    var parked: Set<Int> = []
     var settle: DispatchWorkItem?
     /** One serial queue per app, so a slow app holds up no other. */
     var queues: [pid_t: DispatchQueue] = [:]
@@ -42,6 +48,8 @@ final class Tiler: NSObject {
     /** Mouse moved with the button down; a plain click sets no drag. */
     var mouseMoved = false
     var drop: (target: Int, zone: Zone)?
+    /** The empty display under a drag. */
+    var dropDisplay: TreeKey?
     let overlay = Tiler.makeOverlay()
     let border = Tiler.makeBorder()
 
@@ -69,10 +77,18 @@ final class Tiler: NSObject {
         }
         // an app started through a launcher (Device Hub) announces no windows; its activation is the cue
         workspace.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
-            self.focusedID()
+            self.reveal(self.focusedID())
             self.sync()
         }
-        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in self.relayout() }
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in
+            self.relayout()
+            // macOS shuffles windows for a moment after, and a parking spot may now be on a display
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                self.applied = [:]
+                self.parked = []
+                self.relayout()
+            }
+        }
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDragged) { _ in self.mouseDragged() }
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { _ in self.mouseUp() }
         registerHotKeys()
@@ -91,6 +107,11 @@ final class Tiler: NSObject {
                   let r = bounds(w), r.width >= minPane, r.height >= minPane else { continue }
             ask.insert(pid_t(pid))
         }
+        // made always-on-top after it was tiled
+        let tiled = Set(trees.values.flatMap(leaves))
+        for w in list where w[kCGWindowLayer as String] as? Int != 0 {
+            if let id = w[kCGWindowNumber as String] as? Int, tiled.contains(id) { release(id) }
+        }
         for pid in ask where pid != getpid() && NSRunningApplication(processIdentifier: pid)?.activationPolicy != .prohibited {
             for window in AXUIElementCreateApplication(pid).value(kAXWindowsAttribute) as? [AXUIElement] ?? [] { add(window) }
         }
@@ -105,9 +126,12 @@ final class Tiler: NSObject {
         for (key, tree) in trees where Set(spaces(of: leaves(tree))) != [key.space] {
             for id in leaves(tree) {
                 let on = spaces(of: [id])
-                guard on.count == 1, on[0] != key.space else { continue }
+                if on.count > 1 { release(id) } // now on every desktop: floats, as in yabai
+                guard on.count == 1, on[0] != key.space, !parked.contains(id) else { continue }
+                // the display it's on now: dragged to another, its Space changed with it
+                let display = windowFrame(id).map { screen(containing: $0.center).displayID } ?? key.display
                 untile(id)
-                append(id, to: TreeKey(space: on[0], display: key.display))
+                append(id, to: shown(TreeKey(space: on[0], display: display)))
             }
         }
         relayout(onScreen: onScreen)
@@ -116,12 +140,34 @@ final class Tiler: NSObject {
     func add(_ window: AXUIElement) {
         guard let id = window.windowID, windows[id] == nil else { return }
         let pid = window.pid
+        #if E2E
+        guard e2eOnly.contains(pid) else { return }
+        #endif
         observe(pid)
         windows[id] = window
         watch(window, id)
+        born[id] = window.frame
+        // a moment's grace: apps raise a new window above the normal level, or pin it to every desktop, only after creating it
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.adopt(id, window) }
+    }
+
+    func adopt(_ id: Int, _ window: AXUIElement) {
         // the AX frame: the window server has nothing yet for a window just created
-        if treeKey(of: id) == nil, window.isStandard, let frame = window.frame, frame.width >= minPane, frame.height >= minPane,
-           !floatingApps.contains(bundle(pid)) { tile(id, near: lastFocus) }
+        guard windows[id] != nil, treeKey(of: id) == nil, window.isStandard, let frame = window.frame, frame.width >= minPane, frame.height >= minPane,
+              !floatingApps.contains(bundle(window.pid)) else { return }
+        tile(id, near: lastFocus)
+        // asked, not the cached `focused`: a background app's focus event may have just replaced it
+        if focusedID() == id {
+            lastFocus = id
+            reveal(id)
+        }
+        relayout()
+    }
+
+    /** Out of the tiling for good, as it came. */
+    func release(_ id: Int) {
+        untile(id)
+        if let frame = born[id] { windows[id]?.setFrame(frame) }
     }
 
     func observe(_ pid: pid_t) {
@@ -156,16 +202,20 @@ final class Tiler: NSObject {
             }
         case kAXFocusedWindowChangedNotification:
             guard let id = element.windowID else { return }
-            focused = id
             add(element)
-            if treeKey(of: id) != nil { lastFocus = id }
+            // a background app's own focus isn't the user's; an app coming forward is picked up by its activation
+            if element.pid == NSWorkspace.shared.frontmostApplication?.pid {
+                focused = id
+                if treeKey(of: id) != nil { lastFocus = id }
+                reveal(id)
+            }
             // an app that hides a window on close sends nothing but this
             relayout()
         case kAXWindowCreatedNotification:
             add(element)
             relayout()
-            // not on screen for a moment yet
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.relayout() }
+            // not on screen for a moment yet, and some apps only then raise it above the normal level
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.sync() }
         case kAXUIElementDestroyedNotification:
             guard let id = watched else { return }
             forget(id)
@@ -213,21 +263,56 @@ final class Tiler: NSObject {
         trees.first { path(to: id, in: $0.value) != nil }?.key
     }
 
-    /** Splits the biggest tile on `target`'s display along its longer side; stacks when a column would come out under `minColumn`. */
+    /** Into the workspace showing where `target` is, unless the window opened on another Space or display: then there. */
     func tile(_ id: Int, near target: Int?) {
-        if let target, target != id, let key = treeKey(of: target), let tree = trees[key], let panes = layouts[key]?.panes,
-           let (target, rect) = panes.filter({ $0.key != id }).max(by: { $0.value.width * $0.value.height < $1.value.width * $1.value.height }) {
-            let zone: Zone = rect.width >= rect.height && rect.width / 2 >= minColumn ? .right : .bottom
-            trees[key] = insertBeside(tree, target, id, zone)
+        let on = spaces(of: [id]).first
+        if let target, let key = treeKey(of: target), on == nil || on == key.space {
+            append(id, to: shown(key))
         } else if let frame = windows[id]?.frame {
             var to = shownKey(screen(containing: frame.center), spaces().current)
-            if let on = spaces(of: [id]).first { to.space = on }
-            append(id, to: to)
+            if let on { to.space = on }
+            append(id, to: shown(to))
         }
     }
 
+    /** Full, it goes on to the next workspace with room. Laid out afresh: `layouts` lags several windows added at once, and has no other Space. */
     func append(_ id: Int, to key: TreeKey) {
-        trees[key] = trees[key].map { appendLeaf($0, id) } ?? .leaf(id)
+        var key = key
+        key.workspace = workspaceWithRoom(from: key.workspace) { n in
+            var at = key
+            at.workspace = n
+            return trees[at].map { leaves($0).count } ?? 0
+        }
+        guard let tree = trees[key] else { trees[key] = .leaf(id); return }
+        let area = tileArea(NSScreen.screens.first { $0.displayID == key.display } ?? NSScreen.screens[0])
+        let shown = ids(windowList(.optionOnScreenOnly)).intersection(leaves(tree))
+        trees[key] = addWindow(tree, id, in: area) { shown.isEmpty || shown.contains($0) }
+    }
+
+    /** `key` with the workspace showing there. */
+    func shown(_ key: TreeKey) -> TreeKey {
+        var base = key
+        base.workspace = 1
+        var key = base
+        key.workspace = active[base] ?? 1
+        return key
+    }
+
+    /** A workspace lives only while it has windows: emptied, the closest one left shows. */
+    func leaveIfEmpty(_ base: TreeKey) {
+        let at = shown(base)
+        guard trees[at] == nil else { return }
+        let occupied = trees.keys.filter { $0.space == at.space && $0.display == at.display }.map(\.workspace)
+        active[base] = nearestWorkspace(to: at.workspace, among: occupied)
+        if let first = trees[shown(base)].flatMap({ leaves($0).first }) { raise(first) }
+    }
+
+    /** Focus landed in a hidden workspace (Dock, ⌘Tab, a fifth window opening): that workspace shows, like i3. The caller lays out. */
+    func reveal(_ id: Int?) {
+        guard let id, let key = treeKey(of: id), shown(key) != key, windows[id]?.pid == NSWorkspace.shared.frontmostApplication?.pid else { return }
+        var base = key
+        base.workspace = 1
+        active[base] = key.workspace
     }
 
     func pane(at point: CGPoint, except id: Int) -> Int? {
@@ -237,12 +322,14 @@ final class Tiler: NSObject {
     func untile(_ id: Int) {
         trees = trees.compactMapValues { removeLeaf($0, id) }
         applied[id] = nil
+        parked.remove(id)
         if zoomed == id { zoomed = nil }
     }
 
     func forget(_ id: Int) {
         untile(id)
         windows[id] = nil
+        born[id] = nil
         if focused == id { focused = nil }
         floatZoomed[id] = nil
         minSizes[id] = nil
@@ -256,17 +343,18 @@ final class Tiler: NSObject {
         let screens = NSScreen.screens
         let displays = Set(screens.map(\.displayID)), (current, all, fullscreen) = spaces()
         // a gone display's or desktop's windows move to main; sync then sends each where it really is
-        let main = shownKey(screens[0], current)
+        let main = shown(shownKey(screens[0], current))
         for (gone, tree) in trees where !displays.contains(gone.display) || !all.contains(gone.space) {
             trees[gone] = nil
             for id in leaves(tree) { append(id, to: main) }
         }
+        for screen in screens { leaveIfEmpty(shownKey(screen, current)) }
         let onScreen = onScreen ?? ids(windowList([.optionOnScreenOnly, .excludeDesktopElements]))
         let visible = { (id: Int) in onScreen.contains(id) }
         layouts = [:]
         var placed: [Int] = []
         for screen in screens {
-            let key = shownKey(screen, current)
+            let key = shown(shownKey(screen, current))
             guard let tree = trees[key], !fullscreen.contains(key.space) else { continue }
             let area = tileArea(screen)
             var out = Layout()
@@ -275,9 +363,14 @@ final class Tiler: NSObject {
             let lone = out.panes.count == 1
             for (id, rect) in out.panes {
                 let to = id == zoomed ? area : lone ? solo(id, rect) : rect
+                parked.remove(id)
                 if place(id, to), id != zoomed { placed.append(id) }
             }
         }
+        for (key, tree) in trees where shown(key) != key {
+            for id in leaves(tree) where !parked.contains(id) { park(id, on: key.display) }
+        }
+        statusItem.button?.title = String(shown(shownKey(screen(containing: mouseAX()), current)).workspace)
         unsettled.formUnion(placed)
         scheduleSettle()
         showFocus()
@@ -350,12 +443,30 @@ final class Tiler: NSObject {
         let most = maxSize(id), width = min(rect.width, most.width), height = min(rect.height, most.height)
         applied[id] = rect
         guard let window = windows[id] else { return true }
-        let frame = CGRect(x: rect.midX - width / 2, y: rect.midY - height / 2, width: width, height: height), pid = window.pid
+        let frame = CGRect(x: rect.midX - width / 2, y: rect.midY - height / 2, width: width, height: height)
+        send(id, window) { $0.setFrame(frame) }
+        return true
+    }
+
+    func park(_ id: Int, on display: CGDirectDisplayID) {
+        guard let window = windows[id] else { return }
+        parked.insert(id)
+        applied[id] = nil // its tile is gone; coming back it's placed afresh
+        let frames = NSScreen.screens.map { ($0.displayID, flip($0.frame)) }
+        let own = frames.first { $0.0 == display }?.1 ?? frames[0].1, others = frames.filter { $0.0 != display }.map(\.1)
+        send(id, window) { window in
+            window.setPosition(parkingSpot(own, others: others, size: window.frame?.size ?? .zero))
+        }
+    }
+
+    /** Off the main thread, in order per app. */
+    func send(_ id: Int, _ window: AXUIElement, _ change: @escaping (AXUIElement) -> Void) {
+        let pid = window.pid
         let queue = queues[pid] ?? DispatchQueue(label: "seam.app.\(pid)")
         queues[pid] = queue
         moving[id, default: 0] += 1
         queue.async {
-            window.setFrame(frame)
+            change(window)
             DispatchQueue.main.async {
                 self.moving[id, default: 1] -= 1
                 if self.moving[id] == 0 { self.moving[id] = nil }
@@ -364,7 +475,12 @@ final class Tiler: NSObject {
                 self.showFocus()
             }
         }
-        return true
+    }
+
+    /** Quitting: nothing would bring them back from off screen. Blocks, the app is about to go. */
+    func unparkAll() {
+        let home = tileArea(NSScreen.screens[0]).origin
+        for id in parked { windows[id]?.setPosition(home) }
     }
 
     func minSize(_ id: Int) -> CGSize {
@@ -383,6 +499,9 @@ final class Tiler: NSObject {
         minSizes = [:]
         maxSizes = [:]
         squeezed = []
+        active = [:]
+        parked = []
+        born = [:]
         soloWidth = [:]
         soloSide = [:]
         zoomed = nil

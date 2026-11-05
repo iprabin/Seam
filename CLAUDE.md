@@ -7,6 +7,9 @@ i3-style auto-tiling window manager for macOS. Native Swift, no dependencies.
 - Zero config, hardcoded on purpose: no config file or settings UI. Only exception: `floatingApps` (UserDefaults, `⌘⌥⇧C`).
 - Every shortcut is ⌘⌥ + key; ⇧ is the only extra modifier allowed. Shortcuts live in `bindings` (Tiler+Keys.swift), which also builds the menu.
 - Misbehaving app windows (VLC aspect lock, Device Hub fixed size) are handled in Seam (`minSizes` / `maxSizes` / `centre`), never by changing the app's settings.
+- Tiles what yabai tiles (`isStandard`): standard subrole, normal window level, one Space, movable, plus resizable. Everything else floats untouched.
+- New windows halve the biggest tile, rightmost on a tie, not the focused one: 1 | ½ over ½, then a 2×2 grid. Two columns at most (`addWindow`, `splitZone`).
+- Quarters are the minimum: a fifth window opens the next workspace (`maxTiles`). Workspaces are Seam's own, i3-style (`TreeKey.workspace`), not macOS Spaces: creating a Space or moving another app's window needs SIP off. A workspace exists only while it has windows (`leaveIfEmpty`).
 - Gaps are 0. Layout is not persisted. No animation.
 - After every change: `./build.sh` and relaunch build/Seam.app.
 
@@ -17,6 +20,7 @@ swift build && .build/debug/Seam --selftest   # tree asserts, prints "selftest o
 ./build.sh                                     # release → build/Seam.app, signed with Apple Development cert
 open build/Seam.app                            # needs Accessibility permission
 swift icon.swift                               # redraw icon.png
+e2e/run.sh                                     # real windows, keys, drags, a virtual display; leaves your windows alone, takes the cursor
 ```
 
 Dev-cert signing keeps the Accessibility grant across rebuilds. If it breaks: Privacy › Accessibility, remove and re-add Seam. Don't run `.build/debug/Seam` for real use: the permission attributes to the terminal.
@@ -37,3 +41,8 @@ Dev-cert signing keeps the Accessibility grant across rebuilds. If it breaks: Pr
 - User drags vs our `setFrame`: moved/resized notifications count only while the left button is down, and only for the first window touched in that drag.
 - `applied` skips windows already at their rect; cleared on Space switch for windows that moved.
 - Native fullscreen Spaces (CGS type 4) are skipped whole.
+- New windows wait 0.15s before tiling (`adopt`): apps raise a window or pin it to all desktops after `kAXWindowCreated`, and `isStandard` would read normal. Later than that, `release` gives its first frame back.
+- `kAXFocusedWindowChanged` fires for background apps too: only the frontmost app's counts, and `adopt` asks (`focusedID`) instead of trusting the cache.
+- A window crossing displays is clamped to the old one until the move lands: `placeAgain` sets its size again after.
+- E2E test traps: synthetic arrow keys need the fn and numpad flags or Carbon hotkeys ignore them; a synthetic key's modifiers stick to the next mouse event, so a stuck control-press won't drag; `NSWindow.init` constrains the rect to the main display; only an app's own process can bring it frontmost. Any `deminiaturize` focuses the window, and Seam then follows it.
+- A hidden workspace's windows sit at `parkingSpot` of their own display, overlapping other displays least (over another display they'd show and join its Space), still "on screen" to CGWindowList. Quitting (and SIGTERM) must `unparkAll`, or they stay off screen until the next launch retiles them.

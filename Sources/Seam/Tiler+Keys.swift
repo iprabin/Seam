@@ -6,6 +6,8 @@ struct Binding {
     let key: Int
     /** Carbon modifier bits, as RegisterEventHotKey wants them. */
     let modifiers: UInt32
+    /** The workspace keys are one hint line, not 18 rows. */
+    var inMenu = true
     let action: () -> Void
 
     var flags: NSEvent.ModifierFlags {
@@ -36,14 +38,24 @@ extension Tiler {
     /** The tile just past `id`'s edge, on any display. */
     func neighbour(_ id: Int, _ zone: Zone) -> Int? {
         guard let key = treeKey(of: id), let r = layouts[key]?.panes[id] else { return nil }
+        return pane(at: past(r, zone), except: id)
+    }
+
+    func past(_ r: CGRect, _ zone: Zone) -> CGPoint {
         let reach: CGFloat = 10
-        let point: CGPoint = switch zone {
+        return switch zone {
         case .left: CGPoint(x: r.minX - reach, y: r.midY)
         case .right: CGPoint(x: r.maxX + reach, y: r.midY)
         case .top: CGPoint(x: r.midX, y: r.minY - reach)
         case .bottom, .center: CGPoint(x: r.midX, y: r.maxY + reach)
         }
-        return pane(at: point, except: id)
+    }
+
+    /** The display beyond the window's own that way, if it's there. */
+    func displayKey(past id: Int, _ zone: Zone) -> TreeKey? {
+        guard let key = treeKey(of: id), let own = NSScreen.screens.first(where: { $0.displayID == key.display }) else { return nil }
+        let point = past(flip(own.frame), zone)
+        return NSScreen.screens.first { flip($0.frame).contains(point) }.map { shown(shownKey($0, spaces().current)) }
     }
 
     /** Swaps with the window that way; a narrowed lone window steps left / centre / right first. */
@@ -55,8 +67,11 @@ extension Tiler {
             soloSide[id] = side
             return relayout()
         }
-        guard let target = neighbour(id, zone) else { return }
-        move(id, onto: target, .center)
+        if let target = neighbour(id, zone) {
+            move(id, onto: target, .center)
+        } else if let key = displayKey(past: id, zone) { // no tile there: an empty display
+            moveTo(id, key)
+        }
         relayout()
     }
 
@@ -166,6 +181,26 @@ extension Tiler {
         relayout()
     }
 
+    /** The display under the mouse shows workspace `n`, if it has windows: an empty one doesn't exist. */
+    func goTo(_ n: Int) {
+        let base = shownKey(screen(containing: mouseAX()), spaces().current)
+        var to = base
+        to.workspace = n
+        guard shown(base) != to, trees[to] != nil else { return }
+        active[base] = n
+        relayout()
+        if let first = trees[shown(base)].flatMap({ leaves($0).first }) { raise(first) }
+    }
+
+    /** Sends the focused window to workspace `n`, staying here, as i3 does. */
+    func send(toWorkspace n: Int) {
+        guard let id = focusedID(), var key = treeKey(of: id), key.workspace != n else { return }
+        key.workspace = n
+        untile(id)
+        append(id, to: key)
+        relayout()
+    }
+
     func balance() {
         guard let id = focusedID(), let key = treeKey(of: id), let tree = trees[key] else { return }
         trees[key] = balanced(tree)
@@ -178,6 +213,7 @@ extension Tiler {
     var bindings: [Binding?] {
         let move = UInt32(cmdKey | optionKey), focus = move | UInt32(shiftKey)
         let app = NSWorkspace.shared.frontmostApplication, name = app?.localizedName ?? "This App"
+        let digits = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
         let arrows: [(String, Int, Zone)] = [("Left", kVK_LeftArrow, .left), ("Right", kVK_RightArrow, .right), ("Up", kVK_UpArrow, .top), ("Down", kVK_DownArrow, .bottom)]
         return arrows.map { name, key, zone in Binding(title: "Swap \(name)", key: key, modifiers: move) { self.moveFocused(zone) } }
             + [nil]
@@ -192,6 +228,10 @@ extension Tiler {
                Binding(title: "Shrink", key: kVK_ANSI_Minus, modifiers: move) { self.grow(-0.1) },
                Binding(title: "Grow", key: kVK_ANSI_Equal, modifiers: move) { self.grow(0.1) },
                Binding(title: "Even Out", key: kVK_ANSI_0, modifiers: move, action: balance)]
+            + digits.enumerated().flatMap { i, key in
+                [Binding(title: "Workspace \(i + 1)", key: key, modifiers: move, inMenu: false) { self.goTo(i + 1) },
+                 Binding(title: "Send to Workspace \(i + 1)", key: key, modifiers: focus, inMenu: false) { self.send(toWorkspace: i + 1) }]
+            }
     }
 
     func registerHotKeys() {
@@ -214,13 +254,14 @@ extension Tiler {
     func addShortcuts(to menu: NSMenu) {
         for (i, binding) in bindings.enumerated() {
             guard let binding else { menu.addItem(.separator()); continue }
+            guard binding.inMenu else { continue }
             let item = menu.addItem(withTitle: binding.title, action: #selector(runBinding(_:)), keyEquivalent: binding.keyEquivalent)
             item.keyEquivalentModifierMask = binding.flags
             item.tag = i
             item.target = self
         }
         menu.addItem(.separator())
-        for hint in ["Drag a window onto another: edge splits, middle swaps", "Drag a window's edge to resize"] {
+        for hint in ["⌘⌥1–9 switch workspace, ⌘⌥⇧1–9 send the window there", "Drag a window onto another: edge splits, middle swaps", "Drag a window's edge to resize"] {
             menu.addItem(withTitle: hint, action: nil, keyEquivalent: "").isEnabled = false
         }
     }

@@ -10,9 +10,11 @@ different, fork it and change the code.
 
 ## What it does
 
-- New windows split the focused one along its longer side.
+- New windows split the biggest tile, two columns at most: side by side, then ½ over ½ on the right, then a 2×2 grid. A fifth opens the next workspace, and a workspace is gone once its last window closes.
+- Only what yabai would tile gets tiled. Always-on-top windows like Firefox's picture-in-picture, and windows on every desktop, are left alone.
 - Tiles sit edge to edge with no gaps, and the focused one gets a spinning rainbow outline.
 - Drag a tile's edge to resize it, and its neighbours follow.
+- Drag a window to an empty display, or ⌘⌥ arrow it there, and it tiles there.
 - Drag a window onto another one. Dropping it on an edge splits there, and dropping it in the middle swaps them.
 - Dialogs always float. So do System Settings and Calculator, and any app you turn tiling off for (⌘⌥⇧C, remembered).
 - Each display has its own layout, and the layout survives restarting Seam.
@@ -32,6 +34,8 @@ Every shortcut is ⌘⌥ + key. They're system-wide, so they override app shortc
 | ⌘⌥ S | Stack the next window under this one / unstack |
 | ⌘⌥ - / = | Shrink / grow width by 10% (a window alone on its display shrinks toward the middle) |
 | ⌘⌥ 0 | Even out all splits on the display |
+| ⌘⌥ 1–9 | Switch workspace (the menu bar shows which) |
+| ⌘⌥⇧ 1–9 | Send this window to a workspace |
 
 The menu bar item lists them all, plus Retile Everything and Quit.
 

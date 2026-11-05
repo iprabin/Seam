@@ -14,8 +14,8 @@ indirect enum Node: Equatable {
 /** Space between tiles; 0 by the user's choice. */
 let gap: CGFloat = 0
 let minPane: CGFloat = 200
-/** Narrowest column a new window may make; under that it stacks instead. */
-let minColumn: CGFloat = 550
+/** Quarters are the smallest tile; the next window opens the next workspace. */
+let maxTiles = 4
 
 func leaves(_ node: Node) -> [Int] {
     switch node {
@@ -26,14 +26,6 @@ func leaves(_ node: Node) -> [Int] {
 
 private func even(_ dir: Dir, _ children: [Node]) -> Node {
     .split(dir, children, children.map { _ in 1 / Double(children.count) })
-}
-
-/** Joins the root split, evening out its shares. */
-func appendLeaf(_ root: Node, _ id: Int) -> Node {
-    switch root {
-    case .leaf: return even(.row, [root, .leaf(id)])
-    case let .split(dir, children, _): return even(dir, children + [.leaf(id)])
-    }
 }
 
 /** Neighbours take its share; a split left with one child collapses into it. */
@@ -85,6 +77,33 @@ func insertBeside(_ node: Node, _ target: Int, _ id: Int, _ zone: Zone) -> Node 
         }
         return .split(d, children.map { insertBeside($0, target, id, zone) }, sizes)
     }
+}
+
+/** The first workspace from `start` on with room for one more. */
+func workspaceWithRoom(from start: Int, tiles: (Int) -> Int) -> Int {
+    (start...).first { tiles($0) < maxTiles } ?? start
+}
+
+/** Where to go from a workspace that emptied: the closest with windows, the lower of equals. */
+func nearestWorkspace(to n: Int, among occupied: [Int]) -> Int? {
+    occupied.min { (abs($0 - n), $0) < (abs($1 - n), $1) }
+}
+
+/** How a new window splits a tile: along its longer side like yabai, but side by side only across the whole display, so two columns at most. */
+func splitZone(_ tile: CGRect, in area: CGRect) -> Zone {
+    tile.width >= tile.height && tile.width >= area.width - 2 ? .right : .bottom
+}
+
+/** Splits the biggest tile, the rightmost then lowest of equals: 1 | ½ over ½, then ½ ½ over ½ ½. */
+func addWindow(_ tree: Node, _ id: Int, in area: CGRect, visible: (Int) -> Bool = { _ in true }) -> Node {
+    var out = Layout()
+    layout(tree, in: area, visible: visible, into: &out)
+    let size = { (r: CGRect) in r.width * r.height }
+    let most = out.panes.values.map(size).max() ?? 0
+    // 2%: a rounded pixel doesn't decide a tie
+    let biggest = out.panes.filter { size($0.value) >= most * 0.98 }
+    guard let (at, rect) = biggest.max(by: { ($0.value.maxX, $0.value.maxY) < ($1.value.maxX, $1.value.maxY) }) else { return tree }
+    return insertBeside(tree, at, id, splitZone(rect, in: area))
 }
 
 /** Centre swaps, an edge moves `id` there. */
@@ -265,8 +284,23 @@ func zoneRect(_ r: CGRect, _ zone: Zone) -> CGRect {
 
 /** `Seam --selftest` */
 func treeSelfTest() {
-    let two = appendLeaf(.leaf(1), 2)
+    let two = insertBeside(.leaf(1), 1, 2, .right)
     precondition(two == .split(.row, [.leaf(1), .leaf(2)], [0.5, 0.5]), "second window")
+    let wide = CGRect(x: 0, y: 0, width: 3440, height: 1440), tall = CGRect(x: 0, y: 0, width: 1080, height: 1920)
+    precondition(splitZone(wide, in: wide) == .right, "the second window goes beside the first")
+    precondition(splitZone(CGRect(x: 0, y: 0, width: 1720, height: 1440), in: wide) == .bottom, "no third column, even on an ultrawide")
+    precondition(splitZone(CGRect(x: 0, y: 0, width: 1720, height: 720), in: wide) == .bottom, "nor from a wide tile in a column")
+    precondition(splitZone(tall, in: tall) == .bottom, "a portrait display stacks first")
+    let added = (2...4).reduce(into: [Node.leaf(1)]) { $0.append(addWindow($0[$0.count - 1], $1, in: wide)) }
+    precondition(added[1] == two, "two: side by side")
+    precondition(workspaceWithRoom(from: 1) { [1: 4, 2: 3][$0] ?? 0 } == 2, "a fifth window goes to the next with room")
+    precondition(workspaceWithRoom(from: 1) { [1: 4, 2: 4][$0] ?? 0 } == 3, "past full ones")
+    precondition(workspaceWithRoom(from: 2) { _ in 0 } == 2, "room here: stays")
+    precondition(nearestWorkspace(to: 3, among: [1, 2, 5]) == 2, "closest")
+    precondition(nearestWorkspace(to: 3, among: [2, 4]) == 2, "the lower of equals")
+    precondition(nearestWorkspace(to: 1, among: []) == nil, "nothing left")
+    precondition(added[2] == .split(.row, [.leaf(1), .split(.column, [.leaf(2), .leaf(3)], [0.5, 0.5])], [0.5, 0.5]), "three: 1 | ½ over ½")
+    precondition(added[3] == .split(.row, [.split(.column, [.leaf(1), .leaf(4)], [0.5, 0.5]), .split(.column, [.leaf(2), .leaf(3)], [0.5, 0.5])], [0.5, 0.5]), "four: a 2×2 grid")
     let stacked = dropLeaf(two, 3, 2, .bottom)
     precondition(stacked == .split(.row, [.leaf(1), .split(.column, [.leaf(2), .leaf(3)], [0.5, 0.5])], [0.5, 0.5]), "one beside two stacked")
     precondition(dropLeaf(two, 3, 2, .right) == .split(.row, [.leaf(1), .leaf(2), .leaf(3)], [0.5, 0.25, 0.25]), "join a row")

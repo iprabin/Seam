@@ -8,9 +8,20 @@ extension Tiler {
         guard let dragging else { return }
         let point = mouseAX()
         guard let target = pane(at: point, except: dragging), let rect = layouts.values.lazy.compactMap({ $0.panes[target] }).first else {
-            if drop != nil { drop = nil; overlay.orderOut(nil) }
+            drop = nil
+            let under = screen(containing: point), key = shown(shownKey(under, spaces().current))
+            if trees[key] == nil { // nothing to land on: the whole display is the drop
+                guard dropDisplay != key else { return }
+                dropDisplay = key
+                overlay.setFrame(flip(tileArea(under)), display: true)
+                overlay.orderFrontRegardless()
+            } else if dropDisplay != nil || overlay.isVisible {
+                dropDisplay = nil
+                overlay.orderOut(nil)
+            }
             return
         }
+        dropDisplay = nil
         let zone = zoneAt(rect, point)
         guard drop.map({ $0 != (target, zone) }) ?? true else { return }
         drop = (target, zone)
@@ -22,18 +33,36 @@ extension Tiler {
         mouseMoved = false
         guard dragging != nil || resizing != nil else { return }
         if let id = dragging, let drop { move(id, onto: drop.target, drop.zone) }
+        if let id = dragging, let dropDisplay { moveTo(id, dropDisplay) }
         if let id = resizing { resizeFromEdges(id) }
         for id in [dragging, resizing].compactMap({ $0 }) { applied[id] = nil }
         dragging = nil
         resizing = nil
         drop = nil
+        dropDisplay = nil
         overlay.orderOut(nil)
         relayout()
     }
 
+    func moveTo(_ id: Int, _ key: TreeKey) {
+        untile(id)
+        append(id, to: key)
+        placeAgain([id])
+    }
+
+    /** A window crossing displays is clamped to the old one until the move lands, so its size goes again after. */
+    func placeAgain(_ ids: [Int]) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            for id in ids { self.applied[id] = nil }
+            self.relayout()
+        }
+    }
+
     func move(_ id: Int, onto target: Int, _ zone: Zone) {
         guard let from = treeKey(of: id), let to = treeKey(of: target), let toTree = trees[to] else { return }
-        if zone == .center { // across every tree, so across displays too
+        if from != to { placeAgain([id, target]) }
+        // a full tree on another display can only swap
+        if zone == .center || (from != to && leaves(toTree).count >= maxTiles) { // across every tree, so across displays too
             trees = trees.mapValues { swapPlaces($0, id, target) }
         } else if from == to {
             trees[to] = dropLeaf(toTree, id, target, zone)
